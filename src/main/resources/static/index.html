@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Log Analyzer - Dashboard</title>
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Log Analyzer</h1>
+        <p class="subtitle">Interface de test, d’analyse, de diagnostic, de triage, d’incidents, d’alerting et de pilotage des logs WORKS</p>
+    </header>
+
+    <section class="card" id="loginCard">
+        <h2>Connexion</h2>
+        <p class="subtitle">Connecte-toi avec un compte de démonstration ou un utilisateur admin créé.</p>
+
+        <div class="row">
+            <input type="text" id="loginUsernameInput" placeholder="Username" value="analyst" />
+            <input type="password" id="loginPasswordInput" placeholder="Mot de passe" value="analyst123" />
+            <button id="loginBtn">Se connecter</button>
+        </div>
+
+        <div class="auth-demo-box">
+            <strong>Comptes de démonstration :</strong><br />
+            admin / admin123<br />
+            analyst / analyst123<br />
+            manager / manager123<br />
+            viewer / viewer123
+        </div>
+
+        <div id="loginError" class="error-text"></div>
+    </section>
+
+    <section class="card">
+        <div class="auth-topbar">
+            <div class="auth-user-info">
+                <span class="status-badge neutral">Utilisateur : <strong id="authDisplayName">-</strong></span>
+                <span class="status-badge neutral">Rôle : <strong id="authRole">-</strong></span>
+                <span id="authState" class="status-badge neutral">Déconnecté</span>
+            </div>
+            <button id="logoutBtn" class="secondary-btn">Se déconnecter</button>
+        </div>
+    </section>
+
+    <div id="securedApp" class="hidden">
+
+        <section class="card">
+            <h2>🤖 Assistant d’analyse</h2>
+            <div class="row">
+                <input type="text" id="assistantQuestionInput" placeholder="Ex: quel est le problème principal de l'import 5 ?" />
+                <button id="askAssistantBtn">Poser la question</button>
+            </div>
+
+            <div id="assistantResultCard" class="assistant-result-card hidden">
+                <div class="assistant-topline">
+                    <div class="assistant-meta-badges">
+                        <span id="assistantSeverityBadge" class="status-badge neutral">Gravité : -</span>
+                        <span id="assistantConfidenceBadge" class="status-badge neutral">Confiance : -</span>
+                        <span id="assistantIntentBadge" class="status-badge neutral">Intent : -</span>
+                    </div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Réponse directe</h3>
+                    <div id="assistantShortAnswerResult" class="assistant-short-answer"></div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Réponse détaillée</h3>
+                    <pre id="assistantAnswerResult" class="json-box assistant-answer-box"></pre>
+                </div>
+
+                <div class="assistant-grid">
+                    <div class="assistant-section">
+                        <h3>Constats clés</h3>
+                        <div id="assistantFindingsResult" class="list-box"></div>
+                    </div>
+
+                    <div class="assistant-section">
+                        <h3>Actions recommandées</h3>
+                        <div id="assistantRecommendationsResult" class="list-box"></div>
+                    </div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Suggestions</h3>
+                    <div id="assistantHintsResult" class="list-box"></div>
+                </div>
+            </div>
+
+            <div id="assistantEmptyState" class="result">
+                Pose une question naturelle pour obtenir une réponse intelligente, structurée et actionnable.
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>📊 Dashboard métier avancé</h2>
+            <div class="row">
+                <button id="loadDashboardBtn">Actualiser Dashboard</button>
+            </div>
+
+            <div class="kpi-container dashboard-kpi-advanced">
+                <div class="kpi-card">
+                    <h3>Total Imports</h3>
+                    <p id="kpiImports">-</p>
+                </div>
+
+                <div class="kpi-card">
+                    <h3>Total Logs</h3>
+                    <p id="kpiLogs">-</p>
+                </div>
+
+                <div class="kpi-card error">
+                    <h3>Total Errors</h3>
+                    <p id="kpiErrors">-</p>
+                </div>
+
+                <div class="kpi-card warning">
+                    <h3>Error Rate</h3>
+                    <p id="kpiRate">-</p>
+                </div>
+
+                <div class="kpi-card accent">
+                    <h3>Total Business Keys</h3>
+                    <p id="kpiBusinessKeys">-</p>
+                </div>
+
+                <div class="kpi-card dark">
+                    <h3>Imports critiques</h3>
+                    <p id="kpiCriticalImports">-</p>
+                </div>
+            </div>
+
+            <div class="dashboard-insights-grid">
+                <div class="insight-card">
+                    <h3>Top erreur dominante</h3>
+                    <div id="dashboardTopErrorType" class="insight-main-value">-</div>
+                </div>
+
+                <div class="insight-card">
+                    <h3>Champ le plus problématique</h3>
+                    <div id="dashboardTopProblemField" class="insight-main-value">-</div>
+                </div>
+
+                <div class="insight-card full-span">
+                    <h3>Import le plus critique</h3>
+                    <div id="dashboardMostCriticalImport" class="insight-main-value multiline">-</div>
+                </div>
+            </div>
+
+            <div class="assistant-grid" style="margin-top:18px;">
+                <div class="assistant-section">
+                    <h3>Top messages d’erreur</h3>
+                    <div id="dashboardTopErrorMessages" class="list-box"></div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Top champs problématiques</h3>
+                    <div id="dashboardTopProblemFields" class="list-box"></div>
+                </div>
+            </div>
+
+            <div class="assistant-grid" style="margin-top:18px;">
+                <div class="assistant-section">
+                    <h3>Imports critiques</h3>
+                    <div id="dashboardCriticalImports" class="list-box"></div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Distribution des event types</h3>
+                    <div id="dashboardEventTypes" class="list-box"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>🏢 Dashboard exécutif / SLA</h2>
+            <div class="row">
+                <button id="loadExecutiveDashboardBtn">Charger dashboard exécutif</button>
+            </div>
+
+            <div class="kpi-container dashboard-kpi-advanced">
+                <div class="kpi-card dark">
+                    <h3>Total incidents</h3>
+                    <p id="execTotalIncidents">-</p>
+                </div>
+                <div class="kpi-card warning">
+                    <h3>Incidents ouverts</h3>
+                    <p id="execOpenIncidents">-</p>
+                </div>
+                <div class="kpi-card accent">
+                    <h3>Incidents en cours</h3>
+                    <p id="execInProgressIncidents">-</p>
+                </div>
+                <div class="kpi-card">
+                    <h3>Incidents résolus</h3>
+                    <p id="execResolvedIncidents">-</p>
+                </div>
+                <div class="kpi-card">
+                    <h3>Incidents fermés</h3>
+                    <p id="execClosedIncidents">-</p>
+                </div>
+                <div class="kpi-card error">
+                    <h3>Logs actifs</h3>
+                    <p id="execActiveLogs">-</p>
+                </div>
+            </div>
+
+            <div class="dashboard-insights-grid">
+                <div class="insight-card">
+                    <h3>SLA triage moyen</h3>
+                    <div id="execAvgTriage" class="insight-main-value">-</div>
+                </div>
+                <div class="insight-card">
+                    <h3>SLA investigation moyen</h3>
+                    <div id="execAvgInvestigation" class="insight-main-value">-</div>
+                </div>
+                <div class="insight-card">
+                    <h3>SLA résolution moyen</h3>
+                    <div id="execAvgResolution" class="insight-main-value">-</div>
+                </div>
+                <div class="insight-card">
+                    <h3>SLA fermeture moyen</h3>
+                    <div id="execAvgClosure" class="insight-main-value">-</div>
+                </div>
+            </div>
+
+            <div class="assistant-grid" style="margin-top:18px;">
+                <div class="assistant-section">
+                    <h3>Incidents par sévérité</h3>
+                    <div id="execIncidentsBySeverity" class="list-box"></div>
+                </div>
+                <div class="assistant-section">
+                    <h3>Incidents par statut</h3>
+                    <div id="execIncidentsByStatus" class="list-box"></div>
+                </div>
+            </div>
+
+            <div class="assistant-grid" style="margin-top:18px;">
+                <div class="assistant-section">
+                    <h3>Charge active par analyste</h3>
+                    <div id="execActiveLogsByAssignee" class="list-box"></div>
+                </div>
+                <div class="assistant-section">
+                    <h3>Points d’attention exécutifs</h3>
+                    <div id="execHighlights" class="list-box"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>1. Importer un fichier log</h2>
+            <div class="row">
+                <input type="file" id="logFile" />
+                <button id="uploadBtn">Importer et traiter</button>
+            </div>
+            <div id="uploadResult" class="result"></div>
+        </section>
+
+        <section class="card">
+            <h2>2. Historique des imports</h2>
+            <div class="row">
+                <button id="loadImportsBtn">Charger les imports</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="importsTable">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Fichier</th>
+                        <th>Statut</th>
+                        <th>Début</th>
+                        <th>Fin</th>
+                        <th>Total lignes</th>
+                        <th>Traitées</th>
+                        <th>Échouées</th>
+                        <th>Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="importsTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>3. Résumé global</h2>
+            <div class="row">
+                <button id="loadSummaryBtn">Charger le résumé global</button>
+            </div>
+            <pre id="summaryResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>4. Résumé d’un import</h2>
+            <div class="row">
+                <input type="number" id="importIdInput" placeholder="ID import" />
+                <button id="loadImportSummaryBtn">Charger le résumé import</button>
+                <button id="loadImportDiagnosticBtn" class="secondary-btn">Diagnostic intelligent</button>
+            </div>
+            <pre id="importSummaryResult" class="json-box"></pre>
+
+            <div id="importDiagnosticCard" class="diagnostic-card hidden">
+                <div class="diagnostic-header">
+                    <div>
+                        <h3>Diagnostic intelligent</h3>
+                        <p class="diagnostic-subtitle">Cause racine, gravité, confiance et actions recommandées</p>
+                    </div>
+                    <div class="assistant-meta-badges">
+                        <span id="diagnosticSeverityBadge" class="status-badge neutral">Gravité : -</span>
+                        <span id="diagnosticConfidenceBadge" class="status-badge neutral">Confiance : -</span>
+                    </div>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Résumé exécutif</h3>
+                    <div id="diagnosticExecutiveSummary" class="diagnostic-summary-box"></div>
+                </div>
+
+                <div class="diagnostic-grid">
+                    <div class="mini-stat-card">
+                        <span class="mini-stat-label">Statut</span>
+                        <span id="diagnosticStatus" class="mini-stat-value">-</span>
+                    </div>
+                    <div class="mini-stat-card">
+                        <span class="mini-stat-label">Logs</span>
+                        <span id="diagnosticTotalLogs" class="mini-stat-value">-</span>
+                    </div>
+                    <div class="mini-stat-card">
+                        <span class="mini-stat-label">Erreurs</span>
+                        <span id="diagnosticErrorCount" class="mini-stat-value">-</span>
+                    </div>
+                    <div class="mini-stat-card">
+                        <span class="mini-stat-label">Taux d’erreur</span>
+                        <span id="diagnosticErrorRate" class="mini-stat-value">-</span>
+                    </div>
+                </div>
+
+                <div class="assistant-grid">
+                    <div class="assistant-section">
+                        <h3>Constats principaux</h3>
+                        <div id="diagnosticFindings" class="list-box"></div>
+                    </div>
+
+                    <div class="assistant-section">
+                        <h3>Actions recommandées</h3>
+                        <div id="diagnosticRecommendations" class="list-box"></div>
+                    </div>
+                </div>
+
+                <div class="assistant-grid">
+                    <div class="assistant-section">
+                        <h3>Anomalies détectées</h3>
+                        <div id="diagnosticAnomalies" class="list-box"></div>
+                    </div>
+
+                    <div class="assistant-section">
+                        <h3>Zones impactées</h3>
+                        <div id="diagnosticImpacts" class="list-box"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>5. Vue active de triage des logs</h2>
+
+            <div class="filters">
+                <input type="text" id="fileNameFilter" placeholder="Nom du fichier log" />
+                <input type="number" id="importIdFilter" placeholder="ID import" />
+                <input type="text" id="levelFilter" placeholder="Filtrer par level (INFO, ERROR)" />
+                <input type="text" id="eventTypeFilter" placeholder="Filtrer par eventType" />
+                <input type="text" id="businessKeyFilter" placeholder="Filtrer par businessKey" />
+                <input type="text" id="fieldNameFilter" placeholder="Filtrer par fieldName" />
+                <input type="text" id="triageStatusFilter" placeholder="Statut triage (OPEN, IN_PROGRESS...)" />
+                <input type="text" id="assignedToFilter" placeholder="Assigné à" />
+                <label class="checkbox-label">
+                    <input type="checkbox" id="errorOnlyFilter" />
+                    Erreurs seulement
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="importantOnlyFilter" />
+                    Importants seulement
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="onlyActiveFilter" checked />
+                    Seulement actifs
+                </label>
+                <input type="number" id="pageSizeInput" placeholder="Taille page" value="25" />
+                <button id="loadLogsBtn">Charger les logs</button>
+            </div>
+
+            <div class="pagination-bar">
+                <button id="prevPageBtn" class="secondary-btn">← Précédent</button>
+                <div id="paginationInfo" class="result inline-result">Page -</div>
+                <button id="nextPageBtn" class="secondary-btn">Suivant →</button>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="logsTable">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Import</th>
+                        <th>Timestamp</th>
+                        <th>Level</th>
+                        <th>Event Type</th>
+                        <th>Champ</th>
+                        <th>BK</th>
+                        <th>Triage</th>
+                        <th>Assigné</th>
+                        <th>Message</th>
+                        <th>Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="logsTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>6. Clusters d’erreurs</h2>
+            <div class="row">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="clusterOnlyActiveFilter" checked />
+                    Seulement clusters actifs
+                </label>
+                <input type="number" id="clusterLimitInput" placeholder="Limite clusters" value="10" />
+                <button id="loadClustersBtn">Charger les clusters</button>
+            </div>
+            <div id="errorClustersResult" class="timeline"></div>
+        </section>
+
+        <section class="card">
+            <h2>🤖 Détection automatique d’incidents</h2>
+            <div class="row">
+                <button id="runAutoIncidentDetectionBtn">Lancer détection auto</button>
+            </div>
+            <pre id="autoIncidentDetectionResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>🚨 Alerting métier</h2>
+            <div class="row">
+                <button id="runAlertChecksBtn">Lancer vérification alertes</button>
+                <button id="loadAlertsBtn">Charger alertes</button>
+                <input type="text" id="alertStatusFilter" placeholder="Filtrer par status (OPEN, ACKNOWLEDGED, RESOLVED)" />
+            </div>
+            <pre id="alertRunResult" class="json-box"></pre>
+            <div id="alertsResult" class="timeline"></div>
+        </section>
+
+        <section class="card">
+            <h2>7. Historique de triage d’un log</h2>
+            <div class="row">
+                <input type="number" id="triageHistoryLogIdInput" placeholder="ID log" />
+                <button id="loadTriageHistoryBtn">Charger l’historique</button>
+            </div>
+            <div id="triageHistoryResult" class="timeline"></div>
+        </section>
+
+        <section class="card">
+            <h2>8. Analyser une Business Key</h2>
+            <div class="row">
+                <input type="text" id="businessKeyInput" placeholder="Ex: 26501330950" />
+                <button id="analyzeBkBtn">Analyser globalement</button>
+            </div>
+            <div class="row">
+                <input type="number" id="importBusinessKeyInput" placeholder="ID import" />
+                <input type="text" id="businessKeyPerImportInput" placeholder="Business Key dans un import" />
+                <button id="analyzeBkPerImportBtn">Analyser dans l’import</button>
+            </div>
+            <pre id="businessKeyResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>9. Lister les business keys d’un import</h2>
+            <div class="row">
+                <input type="number" id="importBusinessKeysIdInput" placeholder="ID import" />
+                <button id="loadImportBusinessKeysBtn">Charger</button>
+            </div>
+            <pre id="importBusinessKeysResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>10. Expliquer un log</h2>
+            <div class="row">
+                <input type="number" id="logIdInput" placeholder="ID du log" />
+                <button id="explainLogBtn">Expliquer</button>
+            </div>
+            <pre id="logExplanationResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>11. Expliquer les erreurs récentes</h2>
+            <div class="row">
+                <input type="number" id="errorLimitInput" placeholder="Limite" value="10" />
+                <button id="explainErrorsBtn">Charger</button>
+            </div>
+            <pre id="errorsExplanationResult" class="json-box"></pre>
+        </section>
+
+        <section class="card">
+            <h2>12. Comprendre ce qui s’est passé dans un import</h2>
+            <div class="row">
+                <input type="number" id="storyImportIdInput" placeholder="ID import" />
+                <button id="loadImportStoryBtn">Comprendre l’import</button>
+            </div>
+
+            <div class="story-block">
+                <h3>Résumé narratif</h3>
+                <pre id="importStorySummaryResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Anomalies détectées</h3>
+                <pre id="importStoryAnomaliesResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Conclusion</h3>
+                <pre id="importStoryConclusionResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Étapes importantes</h3>
+                <div id="importStoryStepsResult" class="timeline"></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>13. Comprendre ce qui s’est passé pour une business key</h2>
+            <div class="row">
+                <input type="text" id="storyBusinessKeyInput" placeholder="Business Key" />
+                <button id="loadBkStoryBtn">Comprendre la BK</button>
+            </div>
+
+            <div class="row">
+                <input type="number" id="storyImportForBkInput" placeholder="ID import" />
+                <input type="text" id="storyBusinessKeyPerImportInput" placeholder="Business Key dans un import" />
+                <button id="loadBkStoryPerImportBtn">Comprendre la BK dans l’import</button>
+            </div>
+
+            <div class="story-block">
+                <h3>Résumé narratif</h3>
+                <pre id="bkStorySummaryResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Anomalies détectées</h3>
+                <pre id="bkStoryAnomaliesResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Conclusion</h3>
+                <pre id="bkStoryConclusionResult" class="json-box"></pre>
+            </div>
+
+            <div class="story-block">
+                <h3>Étapes importantes</h3>
+                <div id="bkStoryStepsResult" class="timeline"></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>14. Gestion des incidents</h2>
+
+            <div class="assistant-grid">
+                <div class="assistant-section">
+                    <h3>Créer un incident</h3>
+                    <div class="row">
+                        <input type="text" id="incidentTitleInput" placeholder="Titre incident" />
+                    </div>
+                    <div class="row">
+                        <input type="text" id="incidentSeverityInput" placeholder="Severity (LOW, MEDIUM, HIGH, CRITICAL)" value="HIGH" />
+                    </div>
+                    <div class="row">
+                        <input type="text" id="incidentAssignedToInput" placeholder="Assigné à" />
+                    </div>
+                    <div class="row">
+                        <input type="text" id="incidentLogIdsInput" placeholder="IDs logs séparés par des virgules ex: 12,15,19" />
+                    </div>
+                    <div class="row">
+                        <input type="text" id="incidentDescriptionInput" placeholder="Description incident" />
+                    </div>
+                    <div class="row">
+                        <button id="createIncidentBtn">Créer incident</button>
+                    </div>
+                    <pre id="incidentCreateResult" class="json-box"></pre>
+                </div>
+
+                <div class="assistant-section">
+                    <h3>Liste des incidents</h3>
+                    <div class="row">
+                        <button id="loadIncidentsBtn">Charger incidents</button>
+                    </div>
+                    <div id="incidentsResult" class="timeline"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>15. Détail / commentaires d’un incident</h2>
+            <div class="row">
+                <input type="number" id="incidentIdInput" placeholder="ID incident" />
+                <button id="loadIncidentCommentsBtn">Charger commentaires</button>
+                <button id="updateIncidentBtn" class="secondary-btn">Mettre à jour incident</button>
+            </div>
+            <div class="row">
+                <input type="text" id="incidentUpdateStatusInput" placeholder="Nouveau statut (TRIAGED, INVESTIGATING, RESOLVED...)" />
+                <input type="text" id="incidentUpdateSeverityInput" placeholder="Nouvelle severity" />
+                <input type="text" id="incidentUpdateAssignedToInput" placeholder="Nouvel assigné" />
+            </div>
+            <div class="row">
+                <input type="text" id="incidentCommentInput" placeholder="Ajouter un commentaire incident" />
+                <button id="addIncidentCommentBtn">Ajouter commentaire</button>
+            </div>
+            <div id="incidentCommentsResult" class="timeline"></div>
+        </section>
+
+        <section class="card">
+            <h2>🧠 Assistant LLM</h2>
+            <div class="row">
+                <input type="text" id="llmPromptInput" placeholder="Ex: résume-moi cet incident" />
+            </div>
+            <div class="row">
+                <input type="text" id="llmContextInput" placeholder="Contexte libre : incident, import, BK..." />
+            </div>
+            <div class="row">
+                <button id="askLlmBtn">Interroger le LLM</button>
+            </div>
+            <pre id="llmResult" class="json-box"></pre>
+        </section>
+
+    </div>
+</div>
+
+<script src="/auth.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
