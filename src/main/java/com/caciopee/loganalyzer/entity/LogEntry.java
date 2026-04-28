@@ -1,116 +1,173 @@
 package com.caciopee.loganalyzer.entity;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "logs")
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+@Table(name = "log_entries",
+        indexes = {
+                @Index(name = "idx_log_entries_import_id", columnList = "import_id"),
+                @Index(name = "idx_log_entries_log_timestamp", columnList = "log_timestamp"),
+                @Index(name = "idx_log_entries_session_id", columnList = "session_id"),
+                @Index(name = "idx_log_entries_user_correlation_id", columnList = "user_correlation_id"),
+                @Index(name = "idx_log_entries_level", columnList = "level"),
+                @Index(name = "idx_log_entries_event_type", columnList = "event_type"),
+                @Index(name = "idx_log_entries_business_key", columnList = "business_key"),
+                @Index(name = "idx_log_entries_is_error", columnList = "is_error"),
+                @Index(name = "idx_log_entries_parse_quality", columnList = "parse_quality")
+        })
 public class LogEntry {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "import_id", nullable = false)
+    private LogImport logImport;
+
     @Column(name = "log_timestamp")
     private LocalDateTime logTimestamp;
 
-    private String executionId;
+    @Column(name = "session_id", length = 100)
+    private String sessionId;
 
+    @Column(name = "level", length = 20)
     private String level;
 
-    @Column(name = "user_name")
+    @Column(name = "user_name", length = 255)
     private String userName;
 
-    @Column(name = "source_class")
+    @Column(name = "source_class", length = 500)
     private String sourceClass;
 
-    @Column(name = "process_name")
+    @Column(name = "process_name", length = 500)
     private String processName;
 
-    @Column(name = "step_code")
+    @Column(name = "step_code", length = 100)
     private String stepCode;
 
     @Column(name = "log_code")
     private Integer logCode;
 
+    @Column(name = "environment", length = 100)
     private String environment;
 
-    @Column(name = "server_name")
+    @Column(name = "server_name", length = 100)
     private String serverName;
 
-    @Column(name = "app_version")
+    @Column(name = "app_version", length = 255)
     private String appVersion;
 
-    @Column(name = "correlation_id")
-    private String correlationId;
+    @Column(name = "user_correlation_id", length = 100)
+    private String userCorrelationId;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "message", columnDefinition = "TEXT")
     private String message;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "raw_log", columnDefinition = "TEXT")
     private String rawLog;
 
-    @Column(name = "event_type")
+    @Column(name = "event_type", length = 100)
     private String eventType;
 
-    @Column(name = "field_name")
+    @Column(name = "field_name", length = 255)
     private String fieldName;
 
-    @Column(name = "interface_field")
+    @Column(name = "interface_field", length = 255)
     private String interfaceField;
 
-    @Column(name = "field_class_code")
+    @Column(name = "field_class_code", length = 255)
     private String fieldClassCode;
 
-    @Column(name = "parsed_type")
+    @Column(name = "parsed_type", length = 100)
     private String parsedType;
 
     @Column(name = "parsed_value", columnDefinition = "TEXT")
     private String parsedValue;
 
-    @Column(name = "relation_name")
+    @Column(name = "relation_name", length = 255)
     private String relationName;
 
-    @Column(name = "relation_key")
+    @Column(name = "relation_key", length = 255)
     private String relationKey;
 
-    @Column(name = "business_key")
+    @Column(name = "business_key", length = 255)
     private String businessKey;
 
-    @Column(name = "mandatory_field")
+    @Column(name = "mandatory_field", length = 255)
     private String mandatoryField;
 
-    @Column(name = "error_column")
+    @Column(name = "error_column", length = 255)
     private String errorColumn;
 
-    @Column(name = "error_attribute")
+    @Column(name = "error_attribute", length = 255)
     private String errorAttribute;
 
     @Column(name = "error_value", columnDefinition = "TEXT")
     private String errorValue;
 
-    @Column(name = "error_business_key")
+    @Column(name = "error_business_key", length = 255)
     private String errorBusinessKey;
 
-    @Column(name = "is_error")
-    private Boolean error = false;
+    @Column(name = "is_error", nullable = false)
+    private Boolean isError = false;
 
     @Column(name = "business_meaning", columnDefinition = "TEXT")
     private String businessMeaning;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "import_id")
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-    private LogImport logImport;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "parse_quality", length = 50)
+    private LogParseQuality parseQuality = LogParseQuality.HEALTHY;
+
+    @Column(name = "ambiguous_message", nullable = false)
+    private Boolean ambiguousMessage = false;
+
+    @Column(name = "incomplete_line", nullable = false)
+    private Boolean incompleteLine = false;
+
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    @JsonIgnore
+    @OneToOne(mappedBy = "logEntry", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private LogRawMessage rawMessageEntity;
 
     public LogEntry() {
     }
 
+    @PrePersist
+    public void prePersist() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+        if (isError == null) {
+            isError = false;
+        }
+        if (ambiguousMessage == null) {
+            ambiguousMessage = false;
+        }
+        if (incompleteLine == null) {
+            incompleteLine = false;
+        }
+        if (parseQuality == null) {
+            parseQuality = LogParseQuality.HEALTHY;
+        }
+    }
+
     public Long getId() {
         return id;
+    }
+
+    public LogImport getLogImport() {
+        return logImport;
+    }
+
+    public void setLogImport(LogImport logImport) {
+        this.logImport = logImport;
     }
 
     public LocalDateTime getLogTimestamp() {
@@ -121,12 +178,12 @@ public class LogEntry {
         this.logTimestamp = logTimestamp;
     }
 
-    public String getExecutionId() {
-        return executionId;
+    public String getSessionId() {
+        return sessionId;
     }
 
-    public void setExecutionId(String executionId) {
-        this.executionId = executionId;
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
 
     public String getLevel() {
@@ -135,6 +192,7 @@ public class LogEntry {
 
     public void setLevel(String level) {
         this.level = level;
+        this.isError = level != null && "ERROR".equalsIgnoreCase(level.trim());
     }
 
     public String getUserName() {
@@ -201,12 +259,12 @@ public class LogEntry {
         this.appVersion = appVersion;
     }
 
-    public String getCorrelationId() {
-        return correlationId;
+    public String getUserCorrelationId() {
+        return userCorrelationId;
     }
 
-    public void setCorrelationId(String correlationId) {
-        this.correlationId = correlationId;
+    public void setUserCorrelationId(String userCorrelationId) {
+        this.userCorrelationId = userCorrelationId;
     }
 
     public String getMessage() {
@@ -337,12 +395,16 @@ public class LogEntry {
         this.errorBusinessKey = errorBusinessKey;
     }
 
-    public Boolean getError() {
-        return error;
+    public Boolean getIsError() {
+        return isError;
     }
 
-    public void setError(Boolean error) {
-        this.error = error;
+    public Boolean isError() {
+        return isError;
+    }
+
+    public void setIsError(Boolean isError) {
+        this.isError = isError;
     }
 
     public String getBusinessMeaning() {
@@ -353,11 +415,46 @@ public class LogEntry {
         this.businessMeaning = businessMeaning;
     }
 
-    public LogImport getLogImport() {
-        return logImport;
+    public LogParseQuality getParseQuality() {
+        return parseQuality;
     }
 
-    public void setLogImport(LogImport logImport) {
-        this.logImport = logImport;
+    public void setParseQuality(LogParseQuality parseQuality) {
+        this.parseQuality = parseQuality;
+    }
+
+    public Boolean getAmbiguousMessage() {
+        return ambiguousMessage;
+    }
+
+    public void setAmbiguousMessage(Boolean ambiguousMessage) {
+        this.ambiguousMessage = ambiguousMessage;
+    }
+
+    public Boolean getIncompleteLine() {
+        return incompleteLine;
+    }
+
+    public void setIncompleteLine(Boolean incompleteLine) {
+        this.incompleteLine = incompleteLine;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LogRawMessage getRawMessageEntity() {
+        return rawMessageEntity;
+    }
+
+    public void setRawMessageEntity(LogRawMessage rawMessageEntity) {
+        this.rawMessageEntity = rawMessageEntity;
+        if (rawMessageEntity != null) {
+            rawMessageEntity.setLogEntry(this);
+        }
     }
 }

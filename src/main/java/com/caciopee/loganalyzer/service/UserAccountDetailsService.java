@@ -19,12 +19,7 @@ public class UserAccountDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        UserAccount user = userAccountRepository.findByUsernameIgnoreCase(username)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
-
-        if (!Boolean.TRUE.equals(user.getActive())) {
-            throw new UsernameNotFoundException("User inactive: " + username);
-        }
+        UserAccount user = getActiveUserByUsername(username);
 
         return new User(
                 user.getUsername(),
@@ -36,5 +31,16 @@ public class UserAccountDetailsService implements UserDetailsService {
     public UserAccount getByUsername(String username) {
         return userAccountRepository.findByUsernameIgnoreCase(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+    }
+
+    public UserAccount getActiveUserByUsername(String username) {
+        UserAccount user = userAccountRepository.findByUsernameIgnoreCase(username)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+
+        if (!Boolean.TRUE.equals(user.getActive())) {
+            throw new UsernameNotFoundException("User inactive: " + username);
+        }
+
+        return user;
     }
 }

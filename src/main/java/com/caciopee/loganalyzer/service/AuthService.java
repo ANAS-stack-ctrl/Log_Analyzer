@@ -1,11 +1,16 @@
 package com.caciopee.loganalyzer.service;
 
-import com.caciopee.loganalyzer.dto.*;
+import com.caciopee.loganalyzer.dto.AuthLoginRequest;
+import com.caciopee.loganalyzer.dto.AuthLogoutRequest;
+import com.caciopee.loganalyzer.dto.AuthRefreshRequest;
+import com.caciopee.loganalyzer.dto.AuthTokenResponse;
 import com.caciopee.loganalyzer.entity.RefreshSession;
 import com.caciopee.loganalyzer.entity.UserAccount;
 import com.caciopee.loganalyzer.repository.RefreshSessionRepository;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.authentication.*;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
@@ -23,29 +28,31 @@ public class AuthService {
     private final UserAccountDetailsService userAccountDetailsService;
     private final JwtService jwtService;
     private final RefreshSessionRepository refreshSessionRepository;
-    private final AuditService auditService;
     private final long refreshTokenDays;
 
     public AuthService(AuthenticationManager authenticationManager,
                        UserAccountDetailsService userAccountDetailsService,
                        JwtService jwtService,
                        RefreshSessionRepository refreshSessionRepository,
-                       AuditService auditService,
                        @Value("${app.security.jwt.refresh-token-days}") long refreshTokenDays) {
         this.authenticationManager = authenticationManager;
         this.userAccountDetailsService = userAccountDetailsService;
         this.jwtService = jwtService;
         this.refreshSessionRepository = refreshSessionRepository;
-        this.auditService = auditService;
         this.refreshTokenDays = refreshTokenDays;
     }
 
     public AuthTokenResponse login(AuthLoginRequest request, String userAgent) {
+        validateLoginRequest(request);
+
         Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
+                new UsernamePasswordAuthenticationToken(
+                        request.getUsername().trim(),
+                        request.getPassword()
+                )
         );
 
-        UserAccount user = userAccountDetailsService.getByUsername(authentication.getName());
+        UserAccount user = userAccountDetailsService.getActiveUserByUsername(authentication.getName());
 
         String accessToken = jwtService.generateAccessToken(
                 user.getUsername(),
@@ -59,22 +66,18 @@ public class AuthService {
         session.setUsername(user.getUsername());
         session.setTokenHash(hash(rawRefreshToken));
         session.setExpiresAt(LocalDateTime.now().plusDays(refreshTokenDays));
-        session.setUserAgent(userAgent);
+        session.setUserAgent(safeUserAgent(userAgent));
         refreshSessionRepository.save(session);
-
-        auditService.log(
-                "LOGIN",
-                "AUTH",
-                null,
-                user.getUsername(),
-                "User logged in"
-        );
 
         return buildResponse(user, accessToken, rawRefreshToken);
     }
 
     public AuthTokenResponse refresh(AuthRefreshRequest request, String userAgent) {
-        String rawRefreshToken = request.getRefreshToken();
+        if (request == null || request.getRefreshToken() == null || request.getRefreshToken().isBlank()) {
+            throw new BadCredentialsException("Refresh token is required");
+        }
+
+        String rawRefreshToken = request.getRefreshToken().trim();
         String tokenHash = hash(rawRefreshToken);
 
         RefreshSession existing = refreshSessionRepository.findByTokenHashAndRevokedFalse(tokenHash)
@@ -91,7 +94,7 @@ public class AuthService {
         existing.setRevokedAt(LocalDateTime.now());
         refreshSessionRepository.save(existing);
 
-        UserAccount user = userAccountDetailsService.getByUsername(existing.getUsername());
+        UserAccount user = userAccountDetailsService.getActiveUserByUsername(existing.getUsername());
 
         String newAccessToken = jwtService.generateAccessToken(
                 user.getUsername(),
@@ -105,16 +108,8 @@ public class AuthService {
         newSession.setUsername(user.getUsername());
         newSession.setTokenHash(hash(newRawRefreshToken));
         newSession.setExpiresAt(LocalDateTime.now().plusDays(refreshTokenDays));
-        newSession.setUserAgent(userAgent);
+        newSession.setUserAgent(safeUserAgent(userAgent));
         refreshSessionRepository.save(newSession);
-
-        auditService.log(
-                "REFRESH_TOKEN",
-                "AUTH",
-                null,
-                user.getUsername(),
-                "Access token refreshed"
-        );
 
         return buildResponse(user, newAccessToken, newRawRefreshToken);
     }
@@ -124,20 +119,25 @@ public class AuthService {
             return;
         }
 
-        String tokenHash = hash(request.getRefreshToken());
+        String tokenHash = hash(request.getRefreshToken().trim());
+
         refreshSessionRepository.findByTokenHashAndRevokedFalse(tokenHash).ifPresent(session -> {
             session.setRevoked(true);
             session.setRevokedAt(LocalDateTime.now());
             refreshSessionRepository.save(session);
-
-            auditService.log(
-                    "LOGOUT",
-                    "AUTH",
-                    null,
-                    session.getUsername(),
-                    "User logged out"
-            );
         });
+    }
+
+    private void validateLoginRequest(AuthLoginRequest request) {
+        if (request == null) {
+            throw new BadCredentialsException("Login request is missing");
+        }
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            throw new BadCredentialsException("Username is required");
+        }
+        if (request.getPassword() == null || request.getPassword().isBlank()) {
+            throw new BadCredentialsException("Password is required");
+        }
     }
 
     private AuthTokenResponse buildResponse(UserAccount user, String accessToken, String refreshToken) {
@@ -154,7 +154,8 @@ public class AuthService {
 
     private String generateRefreshToken() {
         String raw = UUID.randomUUID() + ":" + UUID.randomUUID();
-        return Base64.getUrlEncoder().withoutPadding()
+        return Base64.getUrlEncoder()
+                .withoutPadding()
                 .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
@@ -166,5 +167,12 @@ public class AuthService {
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to hash refresh token", ex);
         }
+    }
+
+    private String safeUserAgent(String userAgent) {
+        if (userAgent == null) {
+            return null;
+        }
+        return userAgent.length() > 500 ? userAgent.substring(0, 500) : userAgent;
     }
 }

@@ -1,1311 +1,859 @@
-let currentLogsPage = 0;
-let currentLogsTotalPages = 1;
+document.addEventListener("DOMContentLoaded", () => {
+    const loginForm = document.getElementById("loginForm");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const humanBtn = document.getElementById("humanBtn");
+    const v2Btn = document.getElementById("v2Btn");
+    const summaryBtn = document.getElementById("summaryBtn");
+    const storyBtn = document.getElementById("storyBtn");
+    const rawBtn = document.getElementById("rawBtn");
+    const clearAnalysisBtn = document.getElementById("clearAnalysisBtn");
+    const fillImportIdBtn = document.getElementById("fillImportIdBtn");
+    const loadLogsBtn = document.getElementById("loadLogsBtn");
+    const loadErrorLogsBtn = document.getElementById("loadErrorLogsBtn");
+    const clearLogsBtn = document.getElementById("clearLogsBtn");
 
-const apiFetch = (...args) => window.apiFetch(...args);
+    loginForm?.addEventListener("submit", onLoginSubmit);
+    logoutBtn?.addEventListener("click", onLogoutClick);
+    uploadBtn?.addEventListener("click", onUploadClick);
+    humanBtn?.addEventListener("click", onHumanClick);
+    v2Btn?.addEventListener("click", onV2Click);
+    summaryBtn?.addEventListener("click", onSummaryClick);
+    storyBtn?.addEventListener("click", onStoryClick);
+    rawBtn?.addEventListener("click", onRawClick);
+    clearAnalysisBtn?.addEventListener("click", onClearAnalysisClick);
+    fillImportIdBtn?.addEventListener("click", onFillImportIdClick);
+    loadLogsBtn?.addEventListener("click", onLoadLogsClick);
+    loadErrorLogsBtn?.addEventListener("click", onLoadErrorLogsClick);
+    clearLogsBtn?.addEventListener("click", onClearLogsClick);
 
-function currentUser() {
-    return window.currentUser();
+    initializeApp().catch(err => {
+        showMessage(err.message || "Erreur d'initialisation.", "error");
+    });
+});
+
+let lastUploadResponse = null;
+
+async function initializeApp() {
+    if (!getAccessToken()) {
+        showLoggedOutUI();
+        return;
+    }
+
+    try {
+        await loadCurrentUser();
+        showLoggedInUI();
+        showMessage("Session active.", "success");
+    } catch (e) {
+        clearTokens();
+        showLoggedOutUI();
+        showMessage(e.message || "Session invalide.", "error");
+    }
 }
 
-function prettyPrint(targetId, data) {
-    document.getElementById(targetId).textContent = JSON.stringify(data, null, 2);
+async function onLoginSubmit(event) {
+    event.preventDefault();
+
+    const username = document.getElementById("username")?.value?.trim();
+    const password = document.getElementById("password")?.value || "";
+
+    if (!username || !password) {
+        showMessage("Veuillez remplir le nom d’utilisateur et le mot de passe.", "error");
+        return;
+    }
+
+    try {
+        showMessage("Connexion en cours...", "info");
+        await login(username, password);
+        await loadCurrentUser();
+        showLoggedInUI();
+        showMessage("Connexion réussie.", "success");
+    } catch (e) {
+        showLoggedOutUI();
+        showMessage(e.message || "Erreur de connexion.", "error");
+    }
 }
 
-function setText(targetId, text) {
-    document.getElementById(targetId).textContent = text;
+async function onLogoutClick() {
+    try {
+        await logout();
+    } catch (_) {
+    }
+
+    clearTokens();
+    showLoggedOutUI();
+    resetProtectedSections();
+    showMessage("Déconnexion effectuée.", "info");
 }
 
-function safe(value) {
-    return value === null || value === undefined ? "" : value;
+async function onUploadClick() {
+    const input = document.getElementById("logFiles");
+    const files = input?.files;
+
+    if (!files || files.length === 0) {
+        showMessage("Veuillez sélectionner au moins un fichier.", "error");
+        return;
+    }
+
+    try {
+        showMessage("Upload en cours...", "info");
+        const result = await uploadLogs(files);
+        lastUploadResponse = result;
+
+        const uploadResult = document.getElementById("uploadResult");
+        if (uploadResult) {
+            uploadResult.textContent = JSON.stringify(result, null, 2);
+        }
+
+        const extractedImportId = extractLatestImportId(result);
+        if (extractedImportId) {
+            const importIdInput = document.getElementById("importIdInput");
+            const logFilterImportId = document.getElementById("logFilterImportId");
+
+            if (importIdInput && !importIdInput.value.trim()) {
+                importIdInput.value = String(extractedImportId);
+            }
+
+            if (logFilterImportId && !logFilterImportId.value.trim()) {
+                logFilterImportId.value = String(extractedImportId);
+            }
+        }
+
+        showMessage("Upload terminé avec succès.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors de l'upload.", "error");
+    }
 }
 
-function safeArray(value) {
-    return Array.isArray(value) ? value : [];
+async function onHumanClick() {
+    const importId = getImportIdOrThrow();
+
+    try {
+        showMessage("Explication globale en cours...", "info");
+        const result = await fetchHumanExplanation(importId);
+        renderHumanResult(result);
+        showMessage("Explication globale chargée.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors de l’explication globale.", "error");
+    }
 }
 
-function buildLogsUrl(page = 0) {
+async function onV2Click() {
+    const importId = getImportIdOrThrow();
+
+    try {
+        showMessage("Analyse V2 compréhensible en cours...", "info");
+        const result = await fetchWorkflowAnalysisV2(importId);
+        renderV2Result(result);
+        showMessage("Analyse V2 chargée.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors de l’analyse V2.", "error");
+    }
+}
+
+async function onSummaryClick() {
+    const importId = getImportIdOrThrow();
+
+    try {
+        showMessage("Résumé technique en cours...", "info");
+        const result = await fetchWorkflowSummary(importId);
+        renderRawResult(result);
+        showMessage("Résumé chargé.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du résumé.", "error");
+    }
+}
+
+async function onStoryClick() {
+    const importId = getImportIdOrThrow();
+
+    try {
+        showMessage("Story technique en cours...", "info");
+        const result = await fetchWorkflowStory(importId);
+        renderRawResult(result);
+        showMessage("Story chargée.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du story engine.", "error");
+    }
+}
+
+async function onRawClick() {
+    const importId = getImportIdOrThrow();
+
+    try {
+        showMessage("Analyse JSON complète en cours...", "info");
+        const result = await fetchWorkflowAnalysis(importId);
+        renderRawResult(result);
+        showMessage("Analyse complète chargée.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors de l’analyse complète.", "error");
+    }
+}
+
+async function onLoadLogsClick() {
+    try {
+        showMessage("Chargement des logs...", "info");
+        const filters = getLogFilters(false);
+        const result = await fetchFilteredLogs(filters);
+        renderLogsResult(result, filters);
+        showMessage("Logs chargés.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du chargement des logs.", "error");
+    }
+}
+
+async function onLoadErrorLogsClick() {
+    try {
+        const errorCheckbox = document.getElementById("logFilterErrorOnly");
+        if (errorCheckbox) {
+            errorCheckbox.checked = true;
+        }
+
+        showMessage("Chargement des logs en erreur...", "info");
+        const filters = getLogFilters(true);
+        const result = await fetchFilteredLogs(filters);
+        renderLogsResult(result, filters);
+        showMessage("Logs en erreur chargés.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du chargement des logs en erreur.", "error");
+    }
+}
+
+function onClearLogsClick() {
+    const logsResult = document.getElementById("logsResult");
+    const logsSummary = document.getElementById("logsSummary");
+
+    if (logsResult) logsResult.innerHTML = "";
+    if (logsSummary) logsSummary.textContent = "";
+
+    document.getElementById("logsResultSection")?.classList.add("hidden");
+    showMessage("Affichage des logs vidé.", "info");
+}
+
+function onClearAnalysisClick() {
+    const raw = document.getElementById("analysisResult");
+    const human = document.getElementById("humanResult");
+    const v2 = document.getElementById("v2Result");
+
+    if (raw) raw.textContent = "";
+    if (human) human.innerHTML = "";
+    if (v2) v2.innerHTML = "";
+
+    document.getElementById("humanResultSection")?.classList.add("hidden");
+    document.getElementById("analysisResultSection")?.classList.add("hidden");
+    document.getElementById("v2ResultSection")?.classList.add("hidden");
+
+    showMessage("Affichage d’analyse vidé.", "info");
+}
+
+function onFillImportIdClick() {
+    const importId = extractLatestImportId(lastUploadResponse);
+
+    if (!importId) {
+        showMessage("Aucun importId détecté dans le dernier résultat d’upload.", "error");
+        return;
+    }
+
+    const input = document.getElementById("importIdInput");
+    const logInput = document.getElementById("logFilterImportId");
+
+    if (input) input.value = String(importId);
+    if (logInput) logInput.value = String(importId);
+
+    showMessage("Le dernier importId a été inséré dans les champs.", "success");
+}
+
+async function loadCurrentUser() {
+    const response = await authFetch("/auth/me");
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Impossible de charger l'utilisateur.");
+    }
+
+    const box = document.getElementById("userInfo");
+    if (box) {
+        box.innerHTML = `
+            <div><strong>Utilisateur :</strong> ${escapeHtml(data.username || "")}</div>
+            <div><strong>Nom :</strong> ${escapeHtml(data.displayName || "")}</div>
+            <div><strong>Email :</strong> ${escapeHtml(data.email || "")}</div>
+            <div><strong>Rôle :</strong> ${escapeHtml(data.role || "")}</div>
+        `;
+    }
+}
+
+async function uploadLogs(fileList) {
+    const formData = new FormData();
+
+    for (const file of fileList) {
+        formData.append("files", file);
+    }
+
+    const response = await authFetch("/ingest/upload", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur upload.");
+    }
+
+    return data;
+}
+
+async function fetchHumanExplanation(importId) {
+    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/human`);
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur explication utilisateur.");
+    }
+
+    return data;
+}
+
+async function fetchWorkflowAnalysisV2(importId) {
+    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/v2`);
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur analyse V2.");
+    }
+
+    return data;
+}
+
+async function fetchWorkflowAnalysis(importId) {
+    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}`);
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur analyse complète.");
+    }
+
+    return data;
+}
+
+async function fetchWorkflowSummary(importId) {
+    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/summary`);
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur résumé.");
+    }
+
+    return data;
+}
+
+async function fetchWorkflowStory(importId) {
+    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/story`);
+    const data = await safeJson(response);
+
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur story.");
+    }
+
+    return data;
+}
+
+async function fetchFilteredLogs(filters) {
     const params = new URLSearchParams();
 
-    const fileName = document.getElementById("fileNameFilter")?.value.trim() || "";
-    const importId = document.getElementById("importIdFilter")?.value.trim() || "";
-    const level = document.getElementById("levelFilter")?.value.trim() || "";
-    const eventType = document.getElementById("eventTypeFilter")?.value.trim() || "";
-    const businessKey = document.getElementById("businessKeyFilter")?.value.trim() || "";
-    const fieldName = document.getElementById("fieldNameFilter")?.value.trim() || "";
-    const triageStatus = document.getElementById("triageStatusFilter")?.value.trim() || "";
-    const assignedTo = document.getElementById("assignedToFilter")?.value.trim() || "";
-    const errorOnly = document.getElementById("errorOnlyFilter")?.checked || false;
-    const importantOnly = document.getElementById("importantOnlyFilter")?.checked || false;
-    const onlyActive = document.getElementById("onlyActiveFilter")?.checked || false;
-    const size = document.getElementById("pageSizeInput")?.value.trim() || "25";
+    if (filters.importId) params.set("importId", filters.importId);
+    if (filters.fileName) params.set("fileName", filters.fileName);
+    if (filters.errorOnly) params.set("error", "true");
+    if (filters.eventType) params.set("eventType", filters.eventType);
+    if (filters.processName) params.set("processName", filters.processName);
+    if (filters.sessionId) params.set("sessionId", filters.sessionId);
+    if (filters.uuid) params.set("uuid", filters.uuid);
+    if (filters.limit) params.set("limit", filters.limit);
 
-    if (fileName) params.append("fileName", fileName);
-    if (importId) params.append("importId", importId);
-    if (level) params.append("level", level);
-    if (eventType) params.append("eventType", eventType);
-    if (businessKey) params.append("businessKey", businessKey);
-    if (fieldName) params.append("fieldName", fieldName);
-    if (triageStatus) params.append("triageStatus", triageStatus);
-    if (assignedTo) params.append("assignedTo", assignedTo);
-    if (errorOnly) params.append("error", "true");
-    if (importantOnly) params.append("important", "true");
-    if (onlyActive) params.append("onlyActive", "true");
+    const response = await authFetch(`/logs?${params.toString()}`);
+    const data = await safeJson(response);
 
-    params.append("page", page);
-    params.append("size", size);
-
-    return `/logs?${params.toString()}`;
-}
-
-function getSeverityClass(value) {
-    const v = safe(value).toUpperCase();
-    if (v === "CRITICAL") return "critical";
-    if (v === "HIGH") return "high";
-    if (v === "MEDIUM") return "medium";
-    if (v === "LOW") return "low";
-    return "neutral";
-}
-
-function getConfidenceClass(value) {
-    const v = safe(value).toUpperCase();
-    if (v === "HIGH") return "confidence-high";
-    if (v === "MEDIUM") return "confidence-medium";
-    if (v === "LOW") return "confidence-low";
-    return "neutral";
-}
-
-function getTriageStatusClass(value) {
-    const v = safe(value).toUpperCase();
-    if (v === "OPEN") return "triage-open";
-    if (v === "IN_PROGRESS") return "triage-in-progress";
-    if (v === "RESOLVED") return "triage-resolved";
-    if (v === "IGNORED") return "triage-ignored";
-    return "neutral";
-}
-
-function applyBadge(targetId, label, value, type) {
-    const badge = document.getElementById(targetId);
-    if (!badge) return;
-    badge.className = `status-badge ${type}`;
-    badge.textContent = `${label} : ${safe(value) || "-"}`;
-}
-
-function renderAssistantList(containerId, items) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const values = safeArray(items);
-
-    if (values.length === 0) {
-        container.innerHTML = `<div class="empty-list-state">Aucune donnée disponible.</div>`;
-        return;
+    if (!response.ok) {
+        throw new Error(data?.message || "Erreur chargement logs.");
     }
 
-    container.innerHTML = `
-        <ul class="modern-list">
-            ${values.map(item => `<li>${safe(item)}</li>`).join("")}
-        </ul>
+    return Array.isArray(data) ? data : [];
+}
+
+function getLogFilters(forceErrorOnly) {
+    const importId = document.getElementById("logFilterImportId")?.value?.trim() || "";
+    const fileName = document.getElementById("logFilterFileName")?.value?.trim() || "";
+    const eventType = document.getElementById("logFilterEventType")?.value?.trim() || "";
+    const processName = document.getElementById("logFilterProcessName")?.value?.trim() || "";
+    const sessionId = document.getElementById("logFilterSessionId")?.value?.trim() || "";
+    const uuid = document.getElementById("logFilterUuid")?.value?.trim() || "";
+    const limit = document.getElementById("logFilterLimit")?.value?.trim() || "100";
+    const errorOnly = forceErrorOnly || Boolean(document.getElementById("logFilterErrorOnly")?.checked);
+
+    if (importId && !/^\d+$/.test(importId)) {
+        throw new Error("Le filtre Import ID doit être numérique.");
+    }
+
+    if (limit && !/^\d+$/.test(limit)) {
+        throw new Error("La limite doit être numérique.");
+    }
+
+    return { importId, fileName, eventType, processName, sessionId, uuid, limit, errorOnly };
+}
+
+function renderRawResult(result) {
+    document.getElementById("analysisResultSection")?.classList.remove("hidden");
+    document.getElementById("humanResultSection")?.classList.add("hidden");
+    document.getElementById("v2ResultSection")?.classList.add("hidden");
+
+    const analysisResult = document.getElementById("analysisResult");
+    if (analysisResult) {
+        analysisResult.textContent = JSON.stringify(result, null, 2);
+    }
+}
+
+function renderHumanResult(result) {
+    document.getElementById("humanResultSection")?.classList.remove("hidden");
+    document.getElementById("analysisResultSection")?.classList.add("hidden");
+    document.getElementById("v2ResultSection")?.classList.add("hidden");
+
+    const box = document.getElementById("humanResult");
+    if (!box) return;
+
+    const segments = Array.isArray(result.segments) ? result.segments : [];
+
+    box.innerHTML = `
+        <div class="human-overview">
+            <div class="status-badge ${escapeHtml(result.overallStatus || "UNKNOWN")}">
+                ${escapeHtml(result.overallStatus || "UNKNOWN")}
+            </div>
+
+            <div><strong>Explication globale :</strong><br>${escapeHtml(result.globalExplanation || "")}</div>
+            <div><strong>Conclusion principale :</strong><br>${escapeHtml(result.keyConclusion || "")}</div>
+
+            <div>
+                <strong>Vue d’ensemble :</strong><br>
+                Segments analysés : ${escapeHtml(result.totalSegments ?? 0)} |
+                Segments en erreur : ${escapeHtml(result.errorSegments ?? 0)} |
+                Segments avec avertissements : ${escapeHtml(result.warningSegments ?? 0)} |
+                Segments avec performance dégradée : ${escapeHtml(result.performanceSegments ?? 0)}
+            </div>
+        </div>
+
+        <div class="segment-list">
+            ${segments.map(renderHumanSegment).join("")}
+        </div>
     `;
 }
 
-function renderKeyValueList(containerId, mapObject, limit = 8) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const entries = Object.entries(mapObject || {})
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, limit);
-
-    if (entries.length === 0) {
-        container.innerHTML = `<div class="empty-list-state">Aucune donnée disponible.</div>`;
-        return;
-    }
-
-    container.innerHTML = `
-        <ul class="modern-list">
-            ${entries.map(([key, value]) => `<li><strong>${safe(key)}</strong> : ${safe(value)}</li>`).join("")}
-        </ul>
+function renderHumanSegment(segment) {
+    return `
+        <div class="segment-card">
+            <h3>${escapeHtml(segment.title || "")}</h3>
+            <div><strong>Explication simple :</strong> ${escapeHtml(segment.simpleExplanation || "")}</div>
+            <div><strong>Cause probable :</strong> ${escapeHtml(segment.probableCause || "")}</div>
+            <div><strong>Impact métier :</strong> ${escapeHtml(segment.businessImpact || "")}</div>
+            <div><strong>Recommandation :</strong> ${escapeHtml(segment.recommendation || "")}</div>
+        </div>
     `;
 }
 
-function renderLogsTable(logs) {
-    const body = document.getElementById("logsTableBody");
-    if (!body) return;
+function renderV2Result(result) {
+    document.getElementById("v2ResultSection")?.classList.remove("hidden");
+    document.getElementById("humanResultSection")?.classList.add("hidden");
+    document.getElementById("analysisResultSection")?.classList.add("hidden");
 
-    body.innerHTML = "";
+    const box = document.getElementById("v2Result");
+    if (!box) return;
 
-    if (!Array.isArray(logs) || logs.length === 0) {
-        body.innerHTML = `
-            <tr>
-                <td colspan="11">Aucun log trouvé.</td>
-            </tr>
-        `;
+    const workflows = Array.isArray(result.workflows) ? result.workflows : [];
+
+    box.innerHTML = `
+        <div class="v2-overview">
+            <div><strong>Import :</strong> ${escapeHtml(result.importId ?? "")}</div>
+            <div><strong>Total workflows reconstruits :</strong> ${escapeHtml(result.totalWorkflows ?? 0)}</div>
+            <div><strong>Workflows avec problème de règle :</strong> ${escapeHtml(result.workflowsWithRuleProblems ?? 0)}</div>
+            <div><strong>Workflows avec résultat vide :</strong> ${escapeHtml(result.workflowsWithZeroResults ?? 0)}</div>
+            <div><strong>Workflows avec signal de performance :</strong> ${escapeHtml(result.workflowsWithPerformanceProblems ?? 0)}</div>
+        </div>
+
+        <div class="v2-grid">
+            ${workflows.map(renderWorkflowCard).join("")}
+        </div>
+    `;
+}
+
+function renderWorkflowCard(workflow) {
+    const detectedInputs = Array.isArray(workflow.detectedInputs) ? workflow.detectedInputs : [];
+    const timeline = Array.isArray(workflow.timeline) ? workflow.timeline : [];
+    const lines = Array.isArray(workflow.lines) ? workflow.lines : [];
+    const workflowId = encodeForAttr(workflow.workflowKey || "workflow");
+
+    return `
+        <div class="workflow-card">
+            <h3>${escapeHtml(workflow.title || workflow.workflowKey || "Workflow")}</h3>
+
+            <div class="workflow-meta">
+                <span class="workflow-pill">Clé : ${escapeHtml(workflow.workflowKey || "N/A")}</span>
+                <span class="workflow-pill">Regroupement : ${escapeHtml(workflow.groupingStrategy || "N/A")}</span>
+                <span class="workflow-pill">UUID : ${escapeHtml(workflow.uuid || "N/A")}</span>
+                <span class="workflow-pill">Session : ${escapeHtml(extractSessionFromKey(workflow.workflowKey) || "N/A")}</span>
+                <span class="workflow-pill">Filtre : ${escapeHtml(workflow.filterCode || "N/A")}</span>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Ce que l’utilisateur a semblé demander</strong>
+                <div>${escapeHtml(workflow.userIntentSummary || "")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Ce qui s’est passé</strong>
+                <div>${escapeHtml(workflow.whatHappenedSummary || "")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Résultat final du workflow</strong>
+                <div>${escapeHtml(workflow.finalOutcome || "")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Cause probable</strong>
+                <div>${escapeHtml(workflow.probableCause || "")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Recommandation</strong>
+                <div>${escapeHtml(workflow.recommendation || "")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Données d’entrée détectées</strong>
+                ${
+        detectedInputs.length
+            ? `<ul class="input-list">${detectedInputs.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+            : `<div>Aucune entrée métier explicite détectée.</div>`
+    }
+            </div>
+
+            <div class="workflow-section">
+                <strong>Enchaînement des actions</strong>
+                ${
+        timeline.length
+            ? `<ul class="timeline-list">${timeline.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+            : `<div>Aucune timeline reconstruite.</div>`
+    }
+            </div>
+
+            <div class="workflow-actions">
+                <button type="button" onclick="toggleWorkflowLines('${workflowId}')">
+                    Voir / cacher les lignes du workflow
+                </button>
+                <button type="button" onclick="loadLogsFromWorkflow('${escapeJs(workflow.workflowKey || "")}','${escapeJs(workflow.uuid || "")}','${escapeJs(workflow.processName || "")}')">
+                    Consulter ces logs dans l’explorateur
+                </button>
+            </div>
+
+            <div class="workflow-lines" id="wf-lines-${workflowId}">
+                ${lines.map(renderWorkflowLineCard).join("")}
+            </div>
+        </div>
+    `;
+}
+
+function renderWorkflowLineCard(line) {
+    return `
+        <div class="line-card">
+            <div class="line-header">
+                <span class="line-pill">${escapeHtml(line.timestamp || "N/A")}</span>
+                <span class="line-pill">${escapeHtml(line.level || "N/A")}</span>
+                <span class="line-pill">${escapeHtml(line.eventType || "N/A")}</span>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Interprétation de cette ligne</strong>
+                <div>${escapeHtml(line.businessMeaning || "Aucune interprétation disponible.")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Process</strong>
+                <div>${escapeHtml(line.processName || "N/A")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Source</strong>
+                <div>${escapeHtml(line.sourceClass || "N/A")}</div>
+            </div>
+
+            <div class="workflow-section">
+                <strong>Message réel</strong>
+                <div class="line-message">${escapeHtml(line.message || "")}</div>
+            </div>
+        </div>
+    `;
+}
+
+function renderLogsResult(logs, filters) {
+    document.getElementById("logsResultSection")?.classList.remove("hidden");
+
+    const logsResult = document.getElementById("logsResult");
+    const logsSummary = document.getElementById("logsSummary");
+
+    if (logsSummary) {
+        logsSummary.textContent =
+            `${logs.length} log(s) | importId=${filters.importId || "tous"} | fileName=${filters.fileName || "tous"} | eventType=${filters.eventType || "tous"} | processName=${filters.processName || "tous"} | sessionId=${filters.sessionId || "tous"} | uuid=${filters.uuid || "tous"} | errorOnly=${filters.errorOnly ? "oui" : "non"}`;
+    }
+
+    if (!logsResult) return;
+
+    if (!logs.length) {
+        logsResult.innerHTML = `<div class="empty-state">Aucun log trouvé avec ces filtres.</div>`;
         return;
     }
 
-    logs.forEach(log => {
-        const tr = document.createElement("tr");
-        const importantStar = log.important ? "⭐" : "";
-        const triageBadgeClass = getTriageStatusClass(log.triageStatus);
+    logsResult.innerHTML = `
+        <div class="logs-list">
+            ${logs.map(renderLogCard).join("")}
+        </div>
+    `;
 
-        tr.innerHTML = `
-            <td>${safe(log.id)}</td>
-            <td>${safe(log.importId)}</td>
-            <td>${safe(log.logTimestamp)}</td>
-            <td>${safe(log.level)}</td>
-            <td>${safe(log.eventType)}</td>
-            <td>${safe(log.fieldName)}</td>
-            <td>${safe(log.businessKey || log.errorBusinessKey)}</td>
-            <td>
-                <div class="triage-cell">
-                    <span class="status-badge ${triageBadgeClass}">${safe(log.triageStatus) || "OPEN"}</span>
-                    ${importantStar ? `<span class="triage-star">${importantStar}</span>` : ""}
-                </div>
-            </td>
-            <td>${safe(log.assignedTo)}</td>
-            <td class="message-cell">
-                ${safe(log.message)}
-                ${log.lastComment ? `<div class="sub-note"><strong>Commentaire:</strong> ${safe(log.lastComment)}</div>` : ""}
-            </td>
-            <td>
-                <div class="log-actions">
-                    <button class="small-btn" onclick="loadExplanation(${log.id})">Expliquer</button>
-                    <button class="small-btn action-progress-btn" onclick="startProgress(${log.id})">En cours</button>
-                    <button class="small-btn action-resolve-btn" onclick="resolveLog(${log.id})">Résoudre</button>
-                    <button class="small-btn action-ignore-btn" onclick="ignoreLog(${log.id})">Ignorer</button>
-                    <button class="small-btn action-important-btn" onclick="${log.important ? `unmarkImportant(${log.id})` : `markImportant(${log.id})`}">
-                        ${log.important ? "Retirer ⭐" : "Important"}
-                    </button>
-                    <button class="small-btn action-assign-btn" onclick="assignLog(${log.id})">Affecter</button>
-                    <button class="small-btn action-comment-btn" onclick="commentLog(${log.id})">Commenter</button>
-                    <button class="small-btn action-history-btn" onclick="loadTriageHistoryById(${log.id})">Historique</button>
-                    <button class="small-btn secondary-small-btn" onclick="prefillIncidentFromLog(${log.id})">Créer incident</button>
-                    ${log.triageStatus === "RESOLVED" || log.triageStatus === "IGNORED"
-            ? `<button class="small-btn action-reopen-btn" onclick="reopenLog(${log.id})">Rouvrir</button>`
-            : ""}
-                </div>
-            </td>
-        `;
-
-        body.appendChild(tr);
-    });
+    document.getElementById("logsResultSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function renderClusters(clusters) {
-    const container = document.getElementById("errorClustersResult");
-    if (!container) return;
+function renderLogCard(log) {
+    const isError = Boolean(log.isError) || String(log.level || "").toUpperCase() === "ERROR";
+    const levelClass = isError ? "error-pill" : "info-pill";
 
-    container.innerHTML = "";
+    return `
+        <div class="log-card">
+            <h3>Log #${escapeHtml(log.id ?? "N/A")}</h3>
 
-    if (!Array.isArray(clusters) || clusters.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucun cluster trouvé.</div></div>`;
-        return;
+            <div class="log-meta">
+                <span class="log-pill ${levelClass}">Level : ${escapeHtml(log.level || "N/A")}</span>
+                <span class="log-pill">Import : ${escapeHtml(log.importId ?? log.logImportId ?? "N/A")}</span>
+                <span class="log-pill">Event : ${escapeHtml(log.eventType || "N/A")}</span>
+                <span class="log-pill">Erreur : ${isError ? "Oui" : "Non"}</span>
+            </div>
+
+            <div class="log-section">
+                <strong>Timestamp</strong>
+                <div>${escapeHtml(log.logTimestamp || "N/A")}</div>
+            </div>
+
+            <div class="log-section">
+                <strong>Process</strong>
+                <div>${escapeHtml(log.processName || "N/A")}</div>
+            </div>
+
+            <div class="log-section">
+                <strong>Source</strong>
+                <div>${escapeHtml(log.sourceClass || "N/A")}</div>
+            </div>
+
+            <div class="log-section">
+                <strong>Explication de la ligne</strong>
+                <div>${escapeHtml(log.businessMeaning || "Aucune explication disponible.")}</div>
+            </div>
+
+            <div class="log-section">
+                <strong>Message réel</strong>
+                <div class="log-message">${escapeHtml(log.message || "")}</div>
+            </div>
+        </div>
+    `;
+}
+
+function getImportIdOrThrow() {
+    const value = document.getElementById("importIdInput")?.value?.trim();
+
+    if (!value) {
+        throw new Error("Veuillez saisir un importId.");
     }
 
-    clusters.forEach(cluster => {
-        const div = document.createElement("div");
-        div.className = "timeline-item";
-
-        div.innerHTML = `
-            <div class="timeline-meta">
-                <span class="status-badge ${getSeverityClass(cluster.severity)}">${safe(cluster.severity)}</span>
-                <span class="badge">${safe(cluster.eventType)}</span>
-                ${cluster.fieldName ? `<span class="badge">${safe(cluster.fieldName)}</span>` : ""}
-            </div>
-            <div class="timeline-title">
-                ${safe(cluster.totalLogs)} log(s) | ${safe(cluster.openLogs)} ouvert(s)
-            </div>
-            <div class="timeline-text"><strong>Message exemple :</strong> ${safe(cluster.sampleMessage)}</div>
-            <div class="timeline-text"><strong>Imports :</strong> ${safeArray(cluster.importIds).join(", ") || "Aucun"}</div>
-            <div class="timeline-text"><strong>Business Keys :</strong> ${safeArray(cluster.businessKeys).join(", ") || "Aucune"}</div>
-        `;
-
-        container.appendChild(div);
-    });
-}
-
-function renderImportsTable(imports) {
-    const body = document.getElementById("importsTableBody");
-    if (!body) return;
-
-    body.innerHTML = "";
-
-    if (!Array.isArray(imports) || imports.length === 0) {
-        body.innerHTML = `
-            <tr>
-                <td colspan="9">Aucun import trouvé.</td>
-            </tr>
-        `;
-        return;
+    if (!/^\d+$/.test(value)) {
+        throw new Error("L'importId doit être numérique.");
     }
 
-    imports.forEach(item => {
-        const tr = document.createElement("tr");
-
-        tr.innerHTML = `
-            <td>${safe(item.id)}</td>
-            <td>${safe(item.originalFileName)}</td>
-            <td>${safe(item.status)}</td>
-            <td>${safe(item.startedAt)}</td>
-            <td>${safe(item.finishedAt)}</td>
-            <td>${safe(item.totalLines)}</td>
-            <td>${safe(item.processedLines)}</td>
-            <td>${safe(item.failedLines)}</td>
-            <td class="imports-actions">
-                <button class="small-btn" onclick="loadImportSummaryById(${item.id})">Résumé</button>
-                <button class="small-btn secondary-small-btn" onclick="loadImportDiagnosticById(${item.id})">Diagnostic</button>
-            </td>
-        `;
-
-        body.appendChild(tr);
-    });
+    return value;
 }
 
-function renderStory(targetSummaryId, targetAnomaliesId, targetConclusionId, targetStepsId, story) {
-    if (!story) {
-        setText(targetSummaryId, "Aucune donnée.");
-        setText(targetAnomaliesId, "Aucune donnée.");
-        setText(targetConclusionId, "Aucune donnée.");
-        const target = document.getElementById(targetStepsId);
-        if (target) target.innerHTML = "";
-        return;
+function getLogFilters(forceErrorOnly) {
+    const importId = document.getElementById("logFilterImportId")?.value?.trim() || "";
+    const fileName = document.getElementById("logFilterFileName")?.value?.trim() || "";
+    const eventType = document.getElementById("logFilterEventType")?.value?.trim() || "";
+    const processName = document.getElementById("logFilterProcessName")?.value?.trim() || "";
+    const sessionId = document.getElementById("logFilterSessionId")?.value?.trim() || "";
+    const uuid = document.getElementById("logFilterUuid")?.value?.trim() || "";
+    const limit = document.getElementById("logFilterLimit")?.value?.trim() || "100";
+    const errorOnly = forceErrorOnly || Boolean(document.getElementById("logFilterErrorOnly")?.checked);
+
+    if (importId && !/^\d+$/.test(importId)) {
+        throw new Error("Le filtre Import ID doit être numérique.");
     }
 
-    setText(targetSummaryId, story.summary || "");
-    prettyPrint(targetAnomaliesId, story.detectedAnomalies || []);
-    setText(targetConclusionId, story.conclusion || "");
-
-    const container = document.getElementById(targetStepsId);
-    if (!container) return;
-    container.innerHTML = "";
-
-    if (!Array.isArray(story.steps) || story.steps.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucune étape importante trouvée.</div></div>`;
-        return;
+    if (limit && !/^\d+$/.test(limit)) {
+        throw new Error("La limite doit être numérique.");
     }
 
-    story.steps.forEach(step => {
-        const div = document.createElement("div");
-        div.className = `timeline-item ${step.level === "ERROR" ? "error" : ""}`;
-
-        div.innerHTML = `
-            <div class="timeline-meta">
-                <span class="badge ${step.level === "ERROR" ? "error" : ""}">${safe(step.level)}</span>
-                <span class="badge">${safe(step.eventType)}</span>
-                ${safe(step.timestamp)}
-            </div>
-            <div class="timeline-title">
-                Log #${safe(step.logId)}
-                ${step.fieldName ? ` | Champ: ${step.fieldName}` : ""}
-                ${step.interfaceField ? ` | Interface: ${step.interfaceField}` : ""}
-                ${step.relationName ? ` | Relation: ${step.relationName}` : ""}
-                ${step.businessKey ? ` | BK: ${step.businessKey}` : ""}
-            </div>
-            <div class="timeline-text">${safe(step.humanExplanation)}</div>
-            <div class="timeline-text" style="margin-top:8px;"><strong>Message original :</strong> ${safe(step.originalMessage)}</div>
-        `;
-
-        container.appendChild(div);
-    });
+    return { importId, fileName, eventType, processName, sessionId, uuid, limit, errorOnly };
 }
 
-function renderTriageHistory(history) {
-    const container = document.getElementById("triageHistoryResult");
-    if (!container) return;
+function toggleWorkflowLines(workflowId) {
+    const box = document.getElementById(`wf-lines-${workflowId}`);
+    if (!box) return;
+    box.classList.toggle("open");
+}
 
-    container.innerHTML = "";
+async function loadLogsFromWorkflow(workflowKey, uuid, processName) {
+    try {
+        const importId = document.getElementById("importIdInput")?.value?.trim() || "";
+        const uuidInput = document.getElementById("logFilterUuid");
+        const processInput = document.getElementById("logFilterProcessName");
+        const importInput = document.getElementById("logFilterImportId");
+        const sessionInput = document.getElementById("logFilterSessionId");
 
-    if (!Array.isArray(history) || history.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucun historique de triage trouvé.</div></div>`;
-        return;
+        if (importInput && importId) importInput.value = importId;
+        if (uuidInput) uuidInput.value = uuid || "";
+        if (processInput) processInput.value = processName || "";
+
+        const extractedSession = extractSessionFromKey(workflowKey);
+        if (sessionInput) sessionInput.value = extractedSession || "";
+
+        showMessage("Chargement des logs du workflow...", "info");
+        const filters = getLogFilters(false);
+        const result = await fetchFilteredLogs(filters);
+        renderLogsResult(result, filters);
+        showMessage("Logs du workflow chargés dans l’explorateur.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du chargement des logs du workflow.", "error");
+    }
+}
+
+function extractSessionFromKey(workflowKey) {
+    if (!workflowKey) return "";
+    if (workflowKey.startsWith("SESSION::")) {
+        return workflowKey.substring("SESSION::".length);
+    }
+    return "";
+}
+
+function extractLatestImportId(result) {
+    if (!result) return null;
+
+    if (Array.isArray(result)) {
+        for (let i = result.length - 1; i >= 0; i--) {
+            const item = result[i];
+            if (item && item.importId != null) {
+                return item.importId;
+            }
+        }
     }
 
-    history.forEach(item => {
-        const div = document.createElement("div");
-        div.className = "timeline-item";
-
-        div.innerHTML = `
-            <div class="timeline-meta">
-                <span class="badge">${safe(item.actionType)}</span>
-                ${safe(item.actionAt)}
-            </div>
-            <div class="timeline-title">
-                ${safe(item.oldStatus)} → ${safe(item.newStatus)}
-                ${item.newAssignedTo ? ` | Assigné à : ${safe(item.newAssignedTo)}` : ""}
-            </div>
-            <div class="timeline-text">
-                <strong>Par :</strong> ${safe(item.actionBy) || "N/A"}
-            </div>
-            <div class="timeline-text">
-                <strong>Commentaire :</strong> ${safe(item.comment) || "Aucun commentaire"}
-            </div>
-        `;
-
-        container.appendChild(div);
-    });
-}
-
-function renderAssistantResponse(data) {
-    document.getElementById("assistantEmptyState")?.classList.add("hidden");
-    document.getElementById("assistantResultCard")?.classList.remove("hidden");
-
-    applyBadge("assistantSeverityBadge", "Gravité", data.severity, getSeverityClass(data.severity));
-    applyBadge("assistantConfidenceBadge", "Confiance", data.confidence, getConfidenceClass(data.confidence));
-    applyBadge("assistantIntentBadge", "Intent", data.detectedIntent, "neutral");
-
-    const shortEl = document.getElementById("assistantShortAnswerResult");
-    if (shortEl) shortEl.textContent = safe(data.shortAnswer) || safe(data.answer) || "Aucune réponse.";
-
-    const answerEl = document.getElementById("assistantAnswerResult");
-    if (answerEl) answerEl.textContent = safe(data.answer) || "Aucune réponse détaillée.";
-
-    renderAssistantList("assistantFindingsResult", data.findings);
-    renderAssistantList("assistantRecommendationsResult", data.recommendations);
-    renderAssistantList("assistantHintsResult", data.hints);
-}
-
-function clearAssistantResponse(message) {
-    document.getElementById("assistantResultCard")?.classList.add("hidden");
-    document.getElementById("assistantEmptyState")?.classList.remove("hidden");
-    const el = document.getElementById("assistantEmptyState");
-    if (el) el.textContent = message;
-}
-
-function renderDiagnostic(data) {
-    document.getElementById("importDiagnosticCard")?.classList.remove("hidden");
-
-    applyBadge("diagnosticSeverityBadge", "Gravité", data.severity, getSeverityClass(data.severity));
-    applyBadge("diagnosticConfidenceBadge", "Confiance", data.confidence, getConfidenceClass(data.confidence));
-
-    const executiveSummary = document.getElementById("diagnosticExecutiveSummary");
-    if (executiveSummary) {
-        executiveSummary.textContent = safe(data.executiveSummary) || "Aucun résumé exécutif disponible.";
+    if (typeof result === "object" && result.importId != null) {
+        return result.importId;
     }
 
-    const map = {
-        diagnosticStatus: safe(data.status) || "-",
-        diagnosticTotalLogs: safe(data.totalLogs) || "0",
-        diagnosticErrorCount: safe(data.errorCount) || "0",
-        diagnosticErrorRate: `${safe(data.errorRate) || "0"} %`
-    };
+    return null;
+}
 
-    Object.entries(map).forEach(([id, value]) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = value;
-    });
+function showLoggedInUI() {
+    document.getElementById("loginSection")?.classList.add("hidden");
+    document.getElementById("userSection")?.classList.remove("hidden");
+    document.getElementById("uploadSection")?.classList.remove("hidden");
+    document.getElementById("uploadResultSection")?.classList.remove("hidden");
+    document.getElementById("analysisSection")?.classList.remove("hidden");
+    document.getElementById("logExplorerSection")?.classList.remove("hidden");
+}
 
-    const findings = [
-        `Cause principale : ${safe(data.mainCause) || "Non déterminée"}`,
-        `Étape de rupture : ${safe(data.failureStep) || "Non déterminée"}`,
-        `Signal dominant : ${safe(data.dominantEventType) || "Non déterminé"}`,
-        data.firstCriticalLogId ? `Premier log critique : #${data.firstCriticalLogId}` : null,
-        data.firstCriticalErrorMessage ? `Premier signal d'erreur : ${data.firstCriticalErrorMessage}` : null,
-        data.impact ? `Impact : ${data.impact}` : null
-    ].filter(Boolean);
+function showLoggedOutUI() {
+    document.getElementById("loginSection")?.classList.remove("hidden");
+    document.getElementById("userSection")?.classList.add("hidden");
+    document.getElementById("uploadSection")?.classList.add("hidden");
+    document.getElementById("uploadResultSection")?.classList.add("hidden");
+    document.getElementById("analysisSection")?.classList.add("hidden");
+    document.getElementById("logExplorerSection")?.classList.add("hidden");
+    document.getElementById("humanResultSection")?.classList.add("hidden");
+    document.getElementById("analysisResultSection")?.classList.add("hidden");
+    document.getElementById("v2ResultSection")?.classList.add("hidden");
+    document.getElementById("logsResultSection")?.classList.add("hidden");
+}
 
-    const impactedZones = [
-        ...(safeArray(data.affectedFields).map(field => `Champ impacté : ${field}`)),
-        ...(safeArray(data.affectedBusinessKeys).map(bk => `Business key impactée : ${bk}`))
+function resetProtectedSections() {
+    const ids = [
+        "userInfo",
+        "uploadResult",
+        "analysisResult",
+        "importIdInput",
+        "logFilterImportId",
+        "logFilterFileName",
+        "logFilterEventType",
+        "logFilterProcessName",
+        "logFilterSessionId",
+        "logFilterUuid",
+        "logFilterLimit"
     ];
 
-    renderAssistantList("diagnosticFindings", findings);
-    renderAssistantList("diagnosticRecommendations", data.recommendations);
-    renderAssistantList("diagnosticAnomalies", data.anomalies);
-    renderAssistantList("diagnosticImpacts", impactedZones);
-}
-
-function clearDiagnostic() {
-    document.getElementById("importDiagnosticCard")?.classList.add("hidden");
-}
-
-function renderDashboardAdvanced(data) {
-    const mapping = {
-        kpiImports: safe(data.totalImports) || "0",
-        kpiLogs: safe(data.totalLogs) || "0",
-        kpiErrors: safe(data.totalErrors) || "0",
-        kpiRate: `${safe(data.errorRate) || "0"} %`,
-        kpiBusinessKeys: safe(data.totalBusinessKeys) || "0",
-        kpiCriticalImports: safe(data.criticalImportsCount) || "0",
-        dashboardTopErrorType: safe(data.topErrorType) || "-",
-        dashboardTopProblemField: safe(data.topProblemField) || "-",
-        dashboardMostCriticalImport: safe(data.mostCriticalImportLabel) || "-"
-    };
-
-    Object.entries(mapping).forEach(([id, value]) => {
+    ids.forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.textContent = value;
-    });
+        if (!el) return;
 
-    renderAssistantList("dashboardTopErrorMessages", data.topErrorMessages);
-    renderAssistantList("dashboardTopProblemFields", data.topProblemFields);
-    renderAssistantList("dashboardCriticalImports", data.criticalImports);
-    renderKeyValueList("dashboardEventTypes", data.eventTypeDistribution, 10);
-}
-
-function renderPagination(meta) {
-    currentLogsPage = meta.page;
-    currentLogsTotalPages = meta.totalPages;
-
-    const info = document.getElementById("paginationInfo");
-    if (info) {
-        info.textContent = `Page ${meta.page + 1} / ${meta.totalPages} — ${meta.totalElements} élément(s)`;
-    }
-
-    const prevBtn = document.getElementById("prevPageBtn");
-    const nextBtn = document.getElementById("nextPageBtn");
-
-    if (prevBtn) prevBtn.disabled = meta.first;
-    if (nextBtn) nextBtn.disabled = meta.last;
-}
-
-function renderIncidents(incidents) {
-    const container = document.getElementById("incidentsResult");
-    if (!container) return;
-
-    container.innerHTML = "";
-
-    if (!Array.isArray(incidents) || incidents.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucun incident trouvé.</div></div>`;
-        return;
-    }
-
-    incidents.forEach(incident => {
-        const div = document.createElement("div");
-        div.className = "timeline-item";
-
-        div.innerHTML = `
-            <div class="timeline-meta">
-                <span class="status-badge ${getSeverityClass(incident.severity)}">${safe(incident.severity)}</span>
-                <span class="badge">${safe(incident.status)}</span>
-                Incident #${safe(incident.id)}
-            </div>
-            <div class="timeline-title">${safe(incident.title)}</div>
-            <div class="timeline-text"><strong>Description :</strong> ${safe(incident.description)}</div>
-            <div class="timeline-text"><strong>Assigné à :</strong> ${safe(incident.assignedTo) || "Non assigné"}</div>
-            <div class="timeline-text"><strong>Créé par :</strong> ${safe(incident.createdBy)}</div>
-            <div class="timeline-text"><strong>Logs liés :</strong> ${safeArray(incident.linkedLogIds).join(", ") || "Aucun"}</div>
-            <div class="timeline-text"><strong>Dernière mise à jour :</strong> ${safe(incident.updatedAt)}</div>
-        `;
-
-        container.appendChild(div);
-    });
-}
-
-function renderIncidentComments(comments) {
-    const container = document.getElementById("incidentCommentsResult");
-    if (!container) return;
-
-    container.innerHTML = "";
-
-    if (!Array.isArray(comments) || comments.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucun commentaire trouvé.</div></div>`;
-        return;
-    }
-
-    comments.forEach(comment => {
-        const div = document.createElement("div");
-        div.className = "timeline-item";
-
-        div.innerHTML = `
-            <div class="timeline-meta">${safe(comment.commentAt)}</div>
-            <div class="timeline-title">${safe(comment.commentBy) || "Utilisateur inconnu"}</div>
-            <div class="timeline-text">${safe(comment.comment)}</div>
-        `;
-
-        container.appendChild(div);
-    });
-}
-
-function renderExecutiveDashboard(data) {
-    const mapping = {
-        execTotalIncidents: safe(data.totalIncidents) || "0",
-        execOpenIncidents: safe(data.openIncidents) || "0",
-        execInProgressIncidents: safe(data.inProgressIncidents) || "0",
-        execResolvedIncidents: safe(data.resolvedIncidents) || "0",
-        execClosedIncidents: safe(data.closedIncidents) || "0",
-        execActiveLogs: safe(data.activeLogs) || "0",
-        execAvgTriage: `${safe(data.avgTriageMinutes) || "0"} min`,
-        execAvgInvestigation: `${safe(data.avgInvestigationMinutes) || "0"} min`,
-        execAvgResolution: `${safe(data.avgResolutionMinutes) || "0"} min`,
-        execAvgClosure: `${safe(data.avgClosureMinutes) || "0"} min`
-    };
-
-    Object.entries(mapping).forEach(([id, value]) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = value;
-    });
-
-    renderKeyValueList("execIncidentsBySeverity", data.incidentsBySeverity, 20);
-    renderKeyValueList("execIncidentsByStatus", data.incidentsByStatus, 20);
-    renderKeyValueList("execActiveLogsByAssignee", data.activeLogsByAssignee, 20);
-    renderAssistantList("execHighlights", data.executiveHighlights);
-}
-
-function renderAlerts(alerts) {
-    const container = document.getElementById("alertsResult");
-    if (!container) return;
-
-    container.innerHTML = "";
-
-    if (!Array.isArray(alerts) || alerts.length === 0) {
-        container.innerHTML = `<div class="timeline-item"><div class="timeline-text">Aucune alerte trouvée.</div></div>`;
-        return;
-    }
-
-    alerts.forEach(alert => {
-        const div = document.createElement("div");
-        div.className = "timeline-item";
-
-        div.innerHTML = `
-            <div class="timeline-meta">
-                <span class="status-badge ${getSeverityClass(alert.severity)}">${safe(alert.severity)}</span>
-                <span class="badge">${safe(alert.status)}</span>
-                ${safe(alert.createdAt)}
-            </div>
-            <div class="timeline-title">${safe(alert.title)}</div>
-            <div class="timeline-text">${safe(alert.message)}</div>
-            <div class="timeline-text"><strong>Source:</strong> ${safe(alert.sourceType)} ${safe(alert.sourceId)}</div>
-            <div class="log-actions" style="margin-top:10px;">
-                <button class="small-btn action-comment-btn" onclick="ackAlert(${alert.id})">Ack</button>
-                <button class="small-btn action-resolve-btn" onclick="resolveAlert(${alert.id})">Résoudre</button>
-            </div>
-        `;
-
-        container.appendChild(div);
-    });
-}
-
-function parseLogIdsInput(value) {
-    return (value || "")
-        .split(",")
-        .map(v => v.trim())
-        .filter(v => v.length > 0)
-        .map(v => Number(v))
-        .filter(v => !Number.isNaN(v));
-}
-
-function prefillIncidentFromLog(logId) {
-    const input = document.getElementById("incidentLogIdsInput");
-    if (input) input.value = String(logId);
-
-    const titleInput = document.getElementById("incidentTitleInput");
-    if (titleInput && !titleInput.value.trim()) {
-        titleInput.value = `Incident lié au log ${logId}`;
-    }
-
-    const descriptionInput = document.getElementById("incidentDescriptionInput");
-    if (descriptionInput && !descriptionInput.value.trim()) {
-        descriptionInput.value = `Incident créé à partir du log ${logId}.`;
-    }
-}
-
-async function uploadFile() {
-    const fileInput = document.getElementById("logFile");
-    const resultBox = document.getElementById("uploadResult");
-
-    if (!fileInput || !resultBox) return;
-
-    if (!fileInput.files || fileInput.files.length === 0) {
-        resultBox.textContent = "Choisis d'abord un fichier log.";
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", fileInput.files[0]);
-
-    try {
-        resultBox.textContent = "Import en cours...";
-        const result = await apiFetch("/ingest/upload", {
-            method: "POST",
-            body: formData
-        });
-        resultBox.textContent = result;
-        await loadImports();
-        await loadDashboard();
-        await loadLogs(0);
-        await loadClusters();
-    } catch (error) {
-        resultBox.textContent = "Erreur: " + error.message;
-    }
-}
-
-async function askAssistant() {
-    const input = document.getElementById("assistantQuestionInput");
-    if (!input) return;
-
-    const question = input.value.trim();
-
-    if (!question) {
-        clearAssistantResponse("Saisis une question.");
-        return;
-    }
-
-    try {
-        clearAssistantResponse("Analyse de la question en cours...");
-        const data = await apiFetch("/assistant/ask", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ question })
-        });
-
-        renderAssistantResponse(data);
-    } catch (error) {
-        clearAssistantResponse("Erreur: " + error.message);
-    }
-}
-
-async function loadDashboard() {
-    try {
-        const data = await apiFetch("/analysis/dashboard");
-        renderDashboardAdvanced(data);
-    } catch (error) {
-        alert("Erreur dashboard: " + error.message);
-    }
-}
-
-async function loadImports() {
-    try {
-        const data = await apiFetch("/imports");
-        renderImportsTable(data);
-    } catch (error) {
-        alert("Erreur lors du chargement des imports: " + error.message);
-    }
-}
-
-async function loadSummary() {
-    try {
-        const data = await apiFetch("/analysis/summary");
-        prettyPrint("summaryResult", data);
-    } catch (error) {
-        setText("summaryResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadImportSummary() {
-    const importId = document.getElementById("importIdInput")?.value.trim();
-    if (!importId) {
-        setText("importSummaryResult", "Saisis un ID d'import.");
-        return;
-    }
-    await loadImportSummaryById(importId);
-}
-
-async function loadImportSummaryById(importId) {
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/summary`);
-        prettyPrint("importSummaryResult", data);
-        const input = document.getElementById("importIdInput");
-        if (input) input.value = importId;
-    } catch (error) {
-        setText("importSummaryResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadImportDiagnostic() {
-    const importId = document.getElementById("importIdInput")?.value.trim();
-    if (!importId) {
-        clearDiagnostic();
-        setText("importSummaryResult", "Saisis un ID d'import.");
-        return;
-    }
-
-    await loadImportDiagnosticById(importId);
-}
-
-async function loadImportDiagnosticById(importId) {
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/diagnostic`);
-        const input = document.getElementById("importIdInput");
-        if (input) input.value = importId;
-        renderDiagnostic(data);
-    } catch (error) {
-        clearDiagnostic();
-        setText("importSummaryResult", "Erreur diagnostic: " + error.message);
-    }
-}
-
-async function loadLogs(page = 0) {
-    try {
-        const data = await apiFetch(buildLogsUrl(page));
-        renderLogsTable(data.content || []);
-        renderPagination(data);
-    } catch (error) {
-        alert("Erreur lors du chargement des logs: " + error.message);
-    }
-}
-
-async function loadClusters() {
-    try {
-        const onlyActive = document.getElementById("clusterOnlyActiveFilter")?.checked ?? true;
-        const limit = document.getElementById("clusterLimitInput")?.value.trim() || "10";
-        const data = await apiFetch(`/logs/clusters/errors?onlyActive=${onlyActive}&limit=${limit}`);
-        renderClusters(data);
-    } catch (error) {
-        const target = document.getElementById("errorClustersResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item error"><div class="timeline-text">Erreur: ${error.message}</div></div>`;
+        if (el.tagName === "INPUT") {
+            el.value = id === "logFilterLimit" ? "100" : "";
+        } else {
+            el.textContent = "";
         }
-    }
-}
-
-async function analyzeBusinessKey() {
-    const businessKey = document.getElementById("businessKeyInput")?.value.trim();
-    if (!businessKey) {
-        setText("businessKeyResult", "Saisis une business key.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/business-key/${encodeURIComponent(businessKey)}`);
-        prettyPrint("businessKeyResult", data);
-    } catch (error) {
-        setText("businessKeyResult", "Erreur: " + error.message);
-    }
-}
-
-async function analyzeBusinessKeyPerImport() {
-    const importId = document.getElementById("importBusinessKeyInput")?.value.trim();
-    const businessKey = document.getElementById("businessKeyPerImportInput")?.value.trim();
-
-    if (!importId || !businessKey) {
-        setText("businessKeyResult", "Saisis l'ID import et la business key.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/business-key/${encodeURIComponent(businessKey)}`);
-        prettyPrint("businessKeyResult", data);
-    } catch (error) {
-        setText("businessKeyResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadImportBusinessKeys() {
-    const importId = document.getElementById("importBusinessKeysIdInput")?.value.trim();
-    if (!importId) {
-        setText("importBusinessKeysResult", "Saisis un ID import.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/business-keys`);
-        prettyPrint("importBusinessKeysResult", data);
-    } catch (error) {
-        setText("importBusinessKeysResult", "Erreur: " + error.message);
-    }
-}
-
-async function explainLog() {
-    const logId = document.getElementById("logIdInput")?.value.trim();
-    if (!logId) {
-        setText("logExplanationResult", "Saisis un ID de log.");
-        return;
-    }
-
-    await loadExplanation(logId);
-}
-
-async function loadExplanation(logId) {
-    try {
-        const data = await apiFetch(`/analysis/log/${logId}/explain`);
-        prettyPrint("logExplanationResult", data);
-        const input = document.getElementById("logIdInput");
-        if (input) input.value = logId;
-    } catch (error) {
-        setText("logExplanationResult", "Erreur: " + error.message);
-    }
-}
-
-async function explainErrors() {
-    const limit = document.getElementById("errorLimitInput")?.value.trim() || "10";
-
-    try {
-        const data = await apiFetch(`/analysis/errors/explain?limit=${encodeURIComponent(limit)}`);
-        prettyPrint("errorsExplanationResult", data);
-    } catch (error) {
-        setText("errorsExplanationResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadImportStory() {
-    const importId = document.getElementById("storyImportIdInput")?.value.trim();
-    if (!importId) {
-        setText("importStorySummaryResult", "Saisis un ID import.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/story`);
-        renderStory(
-            "importStorySummaryResult",
-            "importStoryAnomaliesResult",
-            "importStoryConclusionResult",
-            "importStoryStepsResult",
-            data
-        );
-    } catch (error) {
-        setText("importStorySummaryResult", "Erreur: " + error.message);
-        setText("importStoryAnomaliesResult", "");
-        setText("importStoryConclusionResult", "");
-        const target = document.getElementById("importStoryStepsResult");
-        if (target) target.innerHTML = "";
-    }
-}
-
-async function loadBusinessKeyStory() {
-    const businessKey = document.getElementById("storyBusinessKeyInput")?.value.trim();
-    if (!businessKey) {
-        setText("bkStorySummaryResult", "Saisis une business key.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/business-key/${encodeURIComponent(businessKey)}/story`);
-        renderStory(
-            "bkStorySummaryResult",
-            "bkStoryAnomaliesResult",
-            "bkStoryConclusionResult",
-            "bkStoryStepsResult",
-            data
-        );
-    } catch (error) {
-        setText("bkStorySummaryResult", "Erreur: " + error.message);
-        setText("bkStoryAnomaliesResult", "");
-        setText("bkStoryConclusionResult", "");
-        const target = document.getElementById("bkStoryStepsResult");
-        if (target) target.innerHTML = "";
-    }
-}
-
-async function loadBusinessKeyStoryPerImport() {
-    const importId = document.getElementById("storyImportForBkInput")?.value.trim();
-    const businessKey = document.getElementById("storyBusinessKeyPerImportInput")?.value.trim();
-
-    if (!importId || !businessKey) {
-        setText("bkStorySummaryResult", "Saisis l'ID import et la business key.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/analysis/import/${importId}/business-key/${encodeURIComponent(businessKey)}/story`);
-        renderStory(
-            "bkStorySummaryResult",
-            "bkStoryAnomaliesResult",
-            "bkStoryConclusionResult",
-            "bkStoryStepsResult",
-            data
-        );
-    } catch (error) {
-        setText("bkStorySummaryResult", "Erreur: " + error.message);
-        setText("bkStoryAnomaliesResult", "");
-        setText("bkStoryConclusionResult", "");
-        const target = document.getElementById("bkStoryStepsResult");
-        if (target) target.innerHTML = "";
-    }
-}
-
-async function callTriageAction(logId, path, payload) {
-    await apiFetch(`/triage/logs/${logId}/${path}`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
     });
 
-    await loadLogs(currentLogsPage);
-    await loadDashboard();
-    await loadClusters();
-    await loadAlerts();
+    const human = document.getElementById("humanResult");
+    if (human) human.innerHTML = "";
+
+    const v2 = document.getElementById("v2Result");
+    if (v2) v2.innerHTML = "";
+
+    const logsResult = document.getElementById("logsResult");
+    if (logsResult) logsResult.innerHTML = "";
+
+    const logsSummary = document.getElementById("logsSummary");
+    if (logsSummary) logsSummary.textContent = "";
+
+    const errorOnly = document.getElementById("logFilterErrorOnly");
+    if (errorOnly) errorOnly.checked = false;
+
+    lastUploadResponse = null;
 }
 
-async function startProgress(logId) {
-    const comment = prompt("Commentaire optionnel pour passer en cours ?", "") || "";
-    await callTriageAction(logId, "start-progress", {
-        comment,
-        actionBy: currentUser()
-    });
+function showMessage(message, type = "info") {
+    const box = document.getElementById("messageBox");
+    if (!box) return;
+    box.className = type;
+    box.textContent = message;
 }
 
-async function resolveLog(logId) {
-    const comment = prompt("Commentaire de résolution (recommandé) :", "") || "";
-    await callTriageAction(logId, "resolve", {
-        comment,
-        actionBy: currentUser()
-    });
+function encodeForAttr(value) {
+    return String(value ?? "")
+        .replaceAll(" ", "_")
+        .replaceAll(":", "_")
+        .replaceAll("|", "_")
+        .replaceAll("/", "_")
+        .replaceAll("\\", "_")
+        .replaceAll(".", "_")
+        .replaceAll("[", "_")
+        .replaceAll("]", "_");
 }
 
-async function ignoreLog(logId) {
-    const comment = prompt("Pourquoi ignorer ce log ? (obligatoire)", "");
-    if (!comment || !comment.trim()) {
-        alert("Un commentaire est obligatoire pour ignorer un log.");
-        return;
-    }
-
-    await callTriageAction(logId, "ignore", {
-        comment,
-        actionBy: currentUser()
-    });
+function escapeJs(value) {
+    return String(value ?? "")
+        .replaceAll("\\", "\\\\")
+        .replaceAll("'", "\\'");
 }
 
-async function reopenLog(logId) {
-    const comment = prompt("Pourquoi rouvrir ce log ? (obligatoire)", "");
-    if (!comment || !comment.trim()) {
-        alert("Un commentaire est obligatoire pour rouvrir un log.");
-        return;
-    }
-
-    await callTriageAction(logId, "reopen", {
-        comment,
-        actionBy: currentUser()
-    });
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
-async function markImportant(logId) {
-    await callTriageAction(logId, "mark-important", {
-        actionBy: currentUser()
-    });
-}
-
-async function unmarkImportant(logId) {
-    await callTriageAction(logId, "unmark-important", {
-        actionBy: currentUser()
-    });
-}
-
-async function assignLog(logId) {
-    const assignedTo = prompt("Assigner à quel utilisateur ?", "");
-    if (!assignedTo || !assignedTo.trim()) {
-        alert("Saisis un utilisateur.");
-        return;
-    }
-
-    const comment = prompt("Commentaire d'affectation (optionnel)", "") || "";
-
-    await callTriageAction(logId, "assign", {
-        assignedTo,
-        comment,
-        actionBy: currentUser()
-    });
-}
-
-async function commentLog(logId) {
-    const comment = prompt("Commentaire à ajouter", "");
-    if (!comment || !comment.trim()) {
-        return;
-    }
-
-    await callTriageAction(logId, "comment", {
-        comment,
-        actionBy: currentUser()
-    });
-}
-
-async function loadTriageHistory() {
-    const logId = document.getElementById("triageHistoryLogIdInput")?.value.trim();
-    if (!logId) {
-        const target = document.getElementById("triageHistoryResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item"><div class="timeline-text">Saisis un ID de log.</div></div>`;
-        }
-        return;
-    }
-
-    await loadTriageHistoryById(logId);
-}
-
-async function loadTriageHistoryById(logId) {
-    try {
-        const data = await apiFetch(`/triage/logs/${logId}/history`);
-        const input = document.getElementById("triageHistoryLogIdInput");
-        if (input) input.value = logId;
-        renderTriageHistory(data);
-    } catch (error) {
-        const target = document.getElementById("triageHistoryResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item error"><div class="timeline-text">Erreur: ${error.message}</div></div>`;
-        }
-    }
-}
-
-async function createIncident() {
-    try {
-        const payload = {
-            title: document.getElementById("incidentTitleInput")?.value.trim() || "",
-            description: document.getElementById("incidentDescriptionInput")?.value.trim() || "",
-            severity: document.getElementById("incidentSeverityInput")?.value.trim() || "",
-            createdBy: currentUser(),
-            assignedTo: document.getElementById("incidentAssignedToInput")?.value.trim() || "",
-            logIds: parseLogIdsInput(document.getElementById("incidentLogIdsInput")?.value || "")
-        };
-
-        const data = await apiFetch("/incidents", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-        });
-
-        prettyPrint("incidentCreateResult", data);
-        await loadIncidents();
-    } catch (error) {
-        setText("incidentCreateResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadIncidents() {
-    try {
-        const data = await apiFetch("/incidents");
-        renderIncidents(data);
-    } catch (error) {
-        const target = document.getElementById("incidentsResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item error"><div class="timeline-text">Erreur: ${error.message}</div></div>`;
-        }
-    }
-}
-
-async function addIncidentComment() {
-    const incidentId = document.getElementById("incidentIdInput")?.value.trim();
-    const comment = document.getElementById("incidentCommentInput")?.value.trim();
-
-    if (!incidentId || !comment) {
-        alert("Incident ID et commentaire requis.");
-        return;
-    }
-
-    try {
-        await apiFetch(`/incidents/${incidentId}/comments`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                comment,
-                commentBy: currentUser()
-            })
-        });
-
-        const input = document.getElementById("incidentCommentInput");
-        if (input) input.value = "";
-
-        await loadIncidentComments();
-        await loadIncidents();
-    } catch (error) {
-        alert("Erreur commentaire incident: " + error.message);
-    }
-}
-
-async function loadIncidentComments() {
-    const incidentId = document.getElementById("incidentIdInput")?.value.trim();
-    if (!incidentId) {
-        alert("Saisis un ID incident.");
-        return;
-    }
-
-    try {
-        const data = await apiFetch(`/incidents/${incidentId}/comments`);
-        renderIncidentComments(data);
-    } catch (error) {
-        const target = document.getElementById("incidentCommentsResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item error"><div class="timeline-text">Erreur: ${error.message}</div></div>`;
-        }
-    }
-}
-
-async function updateIncident() {
-    const incidentId = document.getElementById("incidentIdInput")?.value.trim();
-    if (!incidentId) {
-        alert("Saisis un ID incident.");
-        return;
-    }
-
-    try {
-        await apiFetch(`/incidents/${incidentId}`, {
-            method: "PUT",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                status: document.getElementById("incidentUpdateStatusInput")?.value.trim() || "",
-                severity: document.getElementById("incidentUpdateSeverityInput")?.value.trim() || "",
-                assignedTo: document.getElementById("incidentUpdateAssignedToInput")?.value.trim() || "",
-                updatedBy: currentUser()
-            })
-        });
-
-        await loadIncidents();
-        await loadIncidentComments();
-    } catch (error) {
-        alert("Erreur mise à jour incident: " + error.message);
-    }
-}
-
-async function runAutoIncidentDetection() {
-    try {
-        const data = await apiFetch("/auto-incidents/detect", {
-            method: "POST"
-        });
-        prettyPrint("autoIncidentDetectionResult", data);
-        await loadIncidents();
-
-        const user = JSON.parse(localStorage.getItem("logAnalyzer.authUser") || "null");
-        if (user?.role === "MANAGER" || user?.role === "ADMIN") {
-            await loadExecutiveDashboard();
-        }
-    } catch (error) {
-        setText("autoIncidentDetectionResult", "Erreur: " + error.message);
-    }
-}
-
-async function runAlertChecks() {
-    try {
-        const data = await apiFetch("/alerts/run-checks", { method: "POST" });
-        prettyPrint("alertRunResult", data);
-        await loadAlerts();
-    } catch (error) {
-        setText("alertRunResult", "Erreur: " + error.message);
-    }
-}
-
-async function loadAlerts() {
-    try {
-        const status = document.getElementById("alertStatusFilter")?.value.trim() || "";
-        const url = status ? `/alerts?status=${encodeURIComponent(status)}` : "/alerts";
-        const data = await apiFetch(url);
-        renderAlerts(data);
-    } catch (error) {
-        const target = document.getElementById("alertsResult");
-        if (target) {
-            target.innerHTML = `<div class="timeline-item error"><div class="timeline-text">Erreur: ${error.message}</div></div>`;
-        }
-    }
-}
-
-async function ackAlert(alertId) {
-    try {
-        await apiFetch(`/alerts/${alertId}/ack`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: currentUser() })
-        });
-        await loadAlerts();
-    } catch (error) {
-        alert("Erreur ack alert: " + error.message);
-    }
-}
-
-async function resolveAlert(alertId) {
-    try {
-        await apiFetch(`/alerts/${alertId}/resolve`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: currentUser() })
-        });
-        await loadAlerts();
-    } catch (error) {
-        alert("Erreur resolve alert: " + error.message);
-    }
-}
-
-async function loadExecutiveDashboard() {
-    try {
-        const data = await apiFetch("/executive/dashboard");
-        renderExecutiveDashboard(data);
-    } catch (error) {
-        alert("Erreur dashboard exécutif: " + error.message);
-    }
-}
-
-async function askLlm() {
-    try {
-        const prompt = document.getElementById("llmPromptInput")?.value.trim() || "";
-        const context = document.getElementById("llmContextInput")?.value.trim() || "";
-
-        const data = await apiFetch("/llm/ask", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt, context })
-        });
-
-        prettyPrint("llmResult", data);
-    } catch (error) {
-        setText("llmResult", "Erreur: " + error.message);
-    }
-}
-
-async function initializeSecuredData() {
-    try {
-        await loadDashboard();
-        await loadImports();
-        await loadLogs(0);
-        await loadClusters();
-        await loadIncidents();
-        await loadAlerts();
-
-        const user = JSON.parse(localStorage.getItem("logAnalyzer.authUser") || "null");
-        if (user?.role === "MANAGER" || user?.role === "ADMIN") {
-            await loadExecutiveDashboard();
-        }
-
-        clearDiagnostic();
-        clearAssistantResponse("Pose une question naturelle pour obtenir une réponse intelligente, structurée et actionnable.");
-    } catch (e) {
-        console.error(e);
-    }
-}
-
-document.getElementById("uploadBtn")?.addEventListener("click", uploadFile);
-document.getElementById("askAssistantBtn")?.addEventListener("click", askAssistant);
-document.getElementById("loadDashboardBtn")?.addEventListener("click", loadDashboard);
-document.getElementById("loadImportsBtn")?.addEventListener("click", loadImports);
-document.getElementById("loadSummaryBtn")?.addEventListener("click", loadSummary);
-document.getElementById("loadImportSummaryBtn")?.addEventListener("click", loadImportSummary);
-document.getElementById("loadImportDiagnosticBtn")?.addEventListener("click", loadImportDiagnostic);
-document.getElementById("loadLogsBtn")?.addEventListener("click", () => loadLogs(0));
-document.getElementById("loadClustersBtn")?.addEventListener("click", loadClusters);
-document.getElementById("loadTriageHistoryBtn")?.addEventListener("click", loadTriageHistory);
-document.getElementById("analyzeBkBtn")?.addEventListener("click", analyzeBusinessKey);
-document.getElementById("analyzeBkPerImportBtn")?.addEventListener("click", analyzeBusinessKeyPerImport);
-document.getElementById("loadImportBusinessKeysBtn")?.addEventListener("click", loadImportBusinessKeys);
-document.getElementById("explainLogBtn")?.addEventListener("click", explainLog);
-document.getElementById("explainErrorsBtn")?.addEventListener("click", explainErrors);
-document.getElementById("loadImportStoryBtn")?.addEventListener("click", loadImportStory);
-document.getElementById("loadBkStoryBtn")?.addEventListener("click", loadBusinessKeyStory);
-document.getElementById("loadBkStoryPerImportBtn")?.addEventListener("click", loadBusinessKeyStoryPerImport);
-
-document.getElementById("prevPageBtn")?.addEventListener("click", () => {
-    if (currentLogsPage > 0) {
-        loadLogs(currentLogsPage - 1);
-    }
-});
-
-document.getElementById("nextPageBtn")?.addEventListener("click", () => {
-    if (currentLogsPage + 1 < currentLogsTotalPages) {
-        loadLogs(currentLogsPage + 1);
-    }
-});
-
-document.getElementById("createIncidentBtn")?.addEventListener("click", createIncident);
-document.getElementById("loadIncidentsBtn")?.addEventListener("click", loadIncidents);
-document.getElementById("addIncidentCommentBtn")?.addEventListener("click", addIncidentComment);
-document.getElementById("loadIncidentCommentsBtn")?.addEventListener("click", loadIncidentComments);
-document.getElementById("updateIncidentBtn")?.addEventListener("click", updateIncident);
-
-document.getElementById("loadExecutiveDashboardBtn")?.addEventListener("click", loadExecutiveDashboard);
-document.getElementById("runAutoIncidentDetectionBtn")?.addEventListener("click", runAutoIncidentDetection);
-
-document.getElementById("runAlertChecksBtn")?.addEventListener("click", runAlertChecks);
-document.getElementById("loadAlertsBtn")?.addEventListener("click", loadAlerts);
-
-document.getElementById("askLlmBtn")?.addEventListener("click", askLlm);
-
-window.addEventListener("DOMContentLoaded", async () => {
-    await window.initializeAuth(async () => {
-        await initializeSecuredData();
-    });
-});
+window.toggleWorkflowLines = toggleWorkflowLines;
+window.loadLogsFromWorkflow = loadLogsFromWorkflow;

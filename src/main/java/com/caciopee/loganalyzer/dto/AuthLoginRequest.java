@@ -1,8 +1,13 @@
 package com.caciopee.loganalyzer.dto;
 
+import jakarta.validation.constraints.NotBlank;
+
 public class AuthLoginRequest {
 
+    @NotBlank
     private String username;
+
+    @NotBlank
     private String password;
 
     public AuthLoginRequest() {

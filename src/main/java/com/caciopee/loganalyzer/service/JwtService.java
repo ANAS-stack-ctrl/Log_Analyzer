@@ -11,17 +11,21 @@ import javax.crypto.SecretKey;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class JwtService {
 
     private final SecretKey secretKey;
     private final long accessTokenMinutes;
+    private final String issuer;
 
     public JwtService(@Value("${app.security.jwt.secret}") String secret,
-                      @Value("${app.security.jwt.access-token-minutes}") long accessTokenMinutes) {
+                      @Value("${app.security.jwt.access-token-minutes}") long accessTokenMinutes,
+                      @Value("${app.security.jwt.issuer:log-analyzer}") String issuer) {
         this.secretKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
         this.accessTokenMinutes = accessTokenMinutes;
+        this.issuer = issuer;
     }
 
     public String generateAccessToken(String username, String role, String displayName) {
@@ -29,6 +33,8 @@ public class JwtService {
         Instant exp = now.plusSeconds(accessTokenMinutes * 60);
 
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .issuer(issuer)
                 .subject(username)
                 .claims(Map.of(
                         "role", role,
@@ -42,6 +48,7 @@ public class JwtService {
 
     public Claims parse(String token) {
         return Jwts.parser()
+                .requireIssuer(issuer)
                 .verifyWith(secretKey)
                 .build()
                 .parseSignedClaims(token)

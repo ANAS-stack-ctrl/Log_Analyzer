@@ -1,13 +1,17 @@
 package com.caciopee.loganalyzer.repository;
 
 import com.caciopee.loganalyzer.entity.LogImport;
+import com.caciopee.loganalyzer.entity.LogImportStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface LogImportRepository extends JpaRepository<LogImport, Long> {
 
-    Optional<LogImport> findFirstByFileHashAndStatus(String fileHash, String status);
+    Optional<LogImport> findByFileHash(String fileHash);
 
-    Optional<LogImport> findFirstByOriginalFileNameIgnoreCaseAndStatus(String originalFileName, String status);
+    List<LogImport> findByStatusOrderByStartedAtDesc(LogImportStatus status);
+
+    List<LogImport> findAllByOrderByStartedAtDesc();
 }

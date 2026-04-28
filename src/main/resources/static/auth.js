@@ -1,177 +1,69 @@
-const AUTH_STORAGE_KEYS = {
-    accessToken: "logAnalyzer.accessToken",
-    refreshToken: "logAnalyzer.refreshToken",
-    authUser: "logAnalyzer.authUser"
+const TOKEN_KEYS = {
+    access: "accessToken",
+    refresh: "refreshToken"
 };
 
+function saveTokens(accessToken, refreshToken) {
+    localStorage.setItem(TOKEN_KEYS.access, accessToken);
+    localStorage.setItem(TOKEN_KEYS.refresh, refreshToken);
+}
+
 function getAccessToken() {
-    return localStorage.getItem(AUTH_STORAGE_KEYS.accessToken);
+    return localStorage.getItem(TOKEN_KEYS.access);
 }
 
 function getRefreshToken() {
-    return localStorage.getItem(AUTH_STORAGE_KEYS.refreshToken);
+    return localStorage.getItem(TOKEN_KEYS.refresh);
 }
 
-function getStoredUser() {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEYS.authUser);
-    return raw ? JSON.parse(raw) : null;
+function clearTokens() {
+    localStorage.removeItem(TOKEN_KEYS.access);
+    localStorage.removeItem(TOKEN_KEYS.refresh);
 }
 
-function storeAuth(data) {
-    localStorage.setItem(AUTH_STORAGE_KEYS.accessToken, data.accessToken);
-    localStorage.setItem(AUTH_STORAGE_KEYS.refreshToken, data.refreshToken);
-    localStorage.setItem(AUTH_STORAGE_KEYS.authUser, JSON.stringify({
-        username: data.username,
-        displayName: data.displayName,
-        role: data.role
-    }));
-}
-
-function clearAuth() {
-    localStorage.removeItem(AUTH_STORAGE_KEYS.accessToken);
-    localStorage.removeItem(AUTH_STORAGE_KEYS.refreshToken);
-    localStorage.removeItem(AUTH_STORAGE_KEYS.authUser);
-}
-
-window.currentUser = function () {
-    const user = getStoredUser();
-    return user?.username || "anonymous";
-};
-
-window.apiFetch = async function (url, options = {}, retry = true) {
-    const headers = new Headers(options.headers || {});
-    const accessToken = getAccessToken();
-
-    if (accessToken) {
-        headers.set("Authorization", `Bearer ${accessToken}`);
-    }
-
-    const response = await fetch(url, {
-        ...options,
-        headers
+async function login(username, password) {
+    const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ username, password })
     });
 
-    const contentType = response.headers.get("content-type") || "";
-    const isJson = contentType.includes("application/json");
-
-    if (response.status === 401 && retry && getRefreshToken()) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-            return window.apiFetch(url, options, false);
-        }
-    }
+    const data = await safeJson(response);
 
     if (!response.ok) {
-        const body = isJson ? await response.json() : await response.text();
-        throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+        throw new Error(data?.message || "Échec de connexion.");
     }
 
-    return isJson ? response.json() : response.text();
-};
+    saveTokens(data.accessToken, data.refreshToken);
+    return data;
+}
 
 async function refreshAccessToken() {
     const refreshToken = getRefreshToken();
-    if (!refreshToken) return false;
 
-    try {
-        const response = await fetch("/auth/refresh", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ refreshToken })
-        });
-
-        if (!response.ok) {
-            clearAuth();
-            updateAuthUi(null);
-            return false;
-        }
-
-        const data = await response.json();
-        storeAuth(data);
-        updateAuthUi(getStoredUser());
-        return true;
-    } catch (e) {
-        clearAuth();
-        updateAuthUi(null);
-        return false;
-    }
-}
-
-async function loadMe() {
-    try {
-        const user = await window.apiFetch("/auth/me");
-        localStorage.setItem(AUTH_STORAGE_KEYS.authUser, JSON.stringify(user));
-        updateAuthUi(user);
-        return user;
-    } catch (e) {
-        return null;
-    }
-}
-
-function updateAuthUi(user) {
-    const authDisplayName = document.getElementById("authDisplayName");
-    const authRole = document.getElementById("authRole");
-    const authState = document.getElementById("authState");
-    const loginCard = document.getElementById("loginCard");
-    const securedApp = document.getElementById("securedApp");
-
-    if (user) {
-        authDisplayName.textContent = user.displayName || user.username;
-        authRole.textContent = user.role || "-";
-        authState.textContent = "Connecté";
-        authState.className = "status-badge confidence-high";
-
-        loginCard.classList.add("hidden");
-        securedApp.classList.remove("hidden");
-    } else {
-        authDisplayName.textContent = "-";
-        authRole.textContent = "-";
-        authState.textContent = "Déconnecté";
-        authState.className = "status-badge neutral";
-
-        loginCard.classList.remove("hidden");
-        securedApp.classList.add("hidden");
-    }
-}
-
-async function login() {
-    const username = document.getElementById("loginUsernameInput").value.trim();
-    const password = document.getElementById("loginPasswordInput").value;
-    const loginError = document.getElementById("loginError");
-
-    loginError.textContent = "";
-
-    if (!username || !password) {
-        loginError.textContent = "Username et mot de passe requis.";
-        return;
+    if (!refreshToken) {
+        throw new Error("Aucun refresh token disponible.");
     }
 
-    try {
-        const response = await fetch("/auth/login", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ username, password })
-        });
+    const response = await fetch("/auth/refresh", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ refreshToken })
+    });
 
-        if (!response.ok) {
-            loginError.textContent = "Identifiants invalides.";
-            return;
-        }
+    const data = await safeJson(response);
 
-        const data = await response.json();
-        storeAuth(data);
-        updateAuthUi(getStoredUser());
-
-        if (typeof window.onAuthReady === "function") {
-            await window.onAuthReady();
-        }
-    } catch (e) {
-        loginError.textContent = "Erreur de connexion.";
+    if (!response.ok) {
+        clearTokens();
+        throw new Error(data?.message || "Session expirée.");
     }
+
+    saveTokens(data.accessToken, data.refreshToken);
+    return data.accessToken;
 }
 
 async function logout() {
@@ -187,33 +79,52 @@ async function logout() {
                 body: JSON.stringify({ refreshToken })
             });
         }
-    } catch (e) {
-        // ignore
+    } finally {
+        clearTokens();
     }
-
-    clearAuth();
-    updateAuthUi(null);
 }
 
-window.initializeAuth = async function (onReady) {
-    window.onAuthReady = onReady;
-
-    document.getElementById("loginBtn").addEventListener("click", login);
-    document.getElementById("logoutBtn").addEventListener("click", logout);
-
-    const storedUser = getStoredUser();
+async function authFetch(url, options = {}, retry = true) {
     const accessToken = getAccessToken();
 
-    if (storedUser && accessToken) {
-        updateAuthUi(storedUser);
-        const me = await loadMe();
-        if (me && typeof window.onAuthReady === "function") {
-            await window.onAuthReady();
-        } else {
-            clearAuth();
-            updateAuthUi(null);
-        }
-    } else {
-        updateAuthUi(null);
+    const headers = new Headers(options.headers || {});
+
+    if (accessToken) {
+        headers.set("Authorization", `Bearer ${accessToken}`);
     }
-};
+
+    const response = await fetch(url, {
+        ...options,
+        headers
+    });
+
+    if (response.status === 401 && retry && getRefreshToken()) {
+        try {
+            const newAccessToken = await refreshAccessToken();
+
+            const retryHeaders = new Headers(options.headers || {});
+            retryHeaders.set("Authorization", `Bearer ${newAccessToken}`);
+
+            return fetch(url, {
+                ...options,
+                headers: retryHeaders
+            });
+        } catch (e) {
+            clearTokens();
+            throw e;
+        }
+    }
+
+    return response;
+}
+
+async function safeJson(response) {
+    const text = await response.text();
+    if (!text) return null;
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { message: text };
+    }
+}
