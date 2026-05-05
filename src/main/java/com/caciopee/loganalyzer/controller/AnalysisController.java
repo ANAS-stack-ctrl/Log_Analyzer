@@ -4,8 +4,11 @@ import com.caciopee.loganalyzer.dto.DashboardSummaryDto;
 import com.caciopee.loganalyzer.dto.ExecutionStoryDto;
 import com.caciopee.loganalyzer.dto.ImportAnalysisSummaryDto;
 import com.caciopee.loganalyzer.dto.IncidentCandidateDto;
+import com.caciopee.loganalyzer.dto.LogEntryViewDto;
+import com.caciopee.loganalyzer.dto.GenericPatternDto;
 import com.caciopee.loganalyzer.service.LogAnalysisService;
 import org.springframework.web.bind.annotation.*;
+
 
 import java.util.List;
 
@@ -48,4 +51,23 @@ public class AnalysisController {
     public ExecutionStoryDto getBusinessKeyStory(@PathVariable String businessKey) {
         return logAnalysisService.getBusinessKeyStory(businessKey);
     }
+    @GetMapping("/import/{importId}/generic-explanations")
+    public List<LogEntryViewDto> getGenericExplanations(@PathVariable Long importId) {
+        return logAnalysisService.getGenericExplanations(importId);
+    }
+    @GetMapping("/generic-explanations/all")
+    public List<LogEntryViewDto> getAllGenericExplanations(
+            @RequestParam(defaultValue = "1") Long startId,
+            @RequestParam(defaultValue = "999999999") Long endId
+    ) {
+        return logAnalysisService.getAllGenericExplanations(startId, endId);
+    }
+    @GetMapping("/generic-explanations/grouped")
+    public List<GenericPatternDto> getGroupedGenericExplanations(
+            @RequestParam(defaultValue = "2000") int pageSize,
+            @RequestParam(defaultValue = "300") int maxPatterns
+    ) {
+        return logAnalysisService.getGroupedGenericExplanations(pageSize, maxPatterns);
+    }
+
 }

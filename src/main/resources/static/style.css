@@ -301,6 +301,32 @@ pre {
     line-height: 1.45;
 }
 
+/* Log explorer readability: keep messages visible on light background */
+.log-message {
+    background: #ffffff;
+    color: #1a1a1a;
+    border: 1px solid #d5dbe3;
+}
+
+.log-details {
+    margin-top: 12px;
+    border-top: 1px solid #e4e7ec;
+    padding-top: 10px;
+}
+
+.log-details summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: #344054;
+}
+
+.log-details-grid {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
 .logs-summary {
     font-size: 13px;
     color: #667085;

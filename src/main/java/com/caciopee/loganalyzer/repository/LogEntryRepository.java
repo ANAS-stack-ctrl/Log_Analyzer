@@ -33,6 +33,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
 
     List<LogEntry> findBySessionIdOrderByLogTimestampAscIdAsc(String sessionId);
 
+    List<LogEntry> findTop10000ByOrderByIdDesc();
+
     long countByLogImportId(Long importId);
 
     long countByLogImportIdAndIsErrorTrue(Long importId);
@@ -194,4 +196,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
                or upper(coalesce(e.rawLog, '')) like '%NO RULE FOUND FOR THIS PARAMS%'
             """)
     long countRuleNotFoundGlobally();
+
+
+    @Query("""
+        select e
+        from LogEntry e
+        where e.id between :startId and :endId
+        order by e.id asc
+        """)
+    List<LogEntry> findByIdBetweenOrderByIdAsc(@Param("startId") Long startId,
+                                               @Param("endId") Long endId);
 }

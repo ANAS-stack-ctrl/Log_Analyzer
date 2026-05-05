@@ -5,11 +5,7 @@ import com.caciopee.loganalyzer.analysis.v2.model.WorkflowGroupV2;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class WorkflowCorrelationService {
@@ -31,26 +27,12 @@ public class WorkflowCorrelationService {
                 return g;
             });
 
-            if (group.getUuid() == null && notBlank(event.getUuid())) {
-                group.setUuid(event.getUuid());
-            }
-            if (group.getTransactionId() == null && notBlank(event.getTransactionId())) {
-                group.setTransactionId(event.getTransactionId());
-            }
-            if (group.getFilterCode() == null && notBlank(event.getFilterCode())) {
-                group.setFilterCode(event.getFilterCode());
-            }
-            if (group.getProcessName() == null && notBlank(event.getProcessName())) {
-                group.setProcessName(event.getProcessName());
-            }
-            if (group.getClassName() == null && notBlank(event.getClassName())) {
-                group.setClassName(event.getClassName());
-            }
-
+            fillIfMissing(group, event);
             group.getEvents().add(event);
         }
 
         List<WorkflowGroupV2> result = new ArrayList<>(groups.values());
+
         for (WorkflowGroupV2 group : result) {
             group.getEvents().sort(
                     Comparator.comparing(
@@ -68,28 +50,50 @@ public class WorkflowCorrelationService {
     }
 
     private String buildGroupKey(WorkflowEventV2 event) {
-        // 1. PRIORITÉ ABSOLUE : SESSION ID
         if (notBlank(event.getSessionId())) {
             return "SESSION::" + event.getSessionId();
         }
 
-        // 2. ENSUITE UUID
         if (notBlank(event.getUuid())) {
             return "UUID::" + event.getUuid();
         }
 
-        // 3. ENSUITE TRANSACTION ID
         if (notBlank(event.getTransactionId())) {
             return "TX::" + event.getTransactionId();
         }
 
-        // 4. FALLBACK CONTEXTUEL
+        if (notBlank(event.getCorrelationId())) {
+            return "CORRELATION::" + event.getCorrelationId();
+        }
+
+        if (notBlank(event.getBusinessKey())) {
+            return "BUSINESS_KEY::" + event.getBusinessKey();
+        }
+
         String process = defaultValue(event.getProcessName(), "UNKNOWN_PROCESS");
         String filter = defaultValue(event.getFilterCode(), "UNKNOWN_FILTER");
         String clazz = defaultValue(event.getClassName(), "UNKNOWN_CLASS");
-        String correlation = defaultValue(event.getCorrelationId(), "UNKNOWN_CORRELATION");
+        String thread = defaultValue(event.getThreadName(), "UNKNOWN_THREAD");
 
-        return process + "::" + filter + "::" + clazz + "::" + correlation;
+        return process + "::" + filter + "::" + clazz + "::" + thread;
+    }
+
+    private void fillIfMissing(WorkflowGroupV2 group, WorkflowEventV2 event) {
+        if (group.getUuid() == null && notBlank(event.getUuid())) {
+            group.setUuid(event.getUuid());
+        }
+        if (group.getTransactionId() == null && notBlank(event.getTransactionId())) {
+            group.setTransactionId(event.getTransactionId());
+        }
+        if (group.getFilterCode() == null && notBlank(event.getFilterCode())) {
+            group.setFilterCode(event.getFilterCode());
+        }
+        if (group.getProcessName() == null && notBlank(event.getProcessName())) {
+            group.setProcessName(event.getProcessName());
+        }
+        if (group.getClassName() == null && notBlank(event.getClassName())) {
+            group.setClassName(event.getClassName());
+        }
     }
 
     private boolean notBlank(String value) {

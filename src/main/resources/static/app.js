@@ -11,7 +11,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const fillImportIdBtn = document.getElementById("fillImportIdBtn");
     const loadLogsBtn = document.getElementById("loadLogsBtn");
     const loadErrorLogsBtn = document.getElementById("loadErrorLogsBtn");
+    const loadGenericExplanationsBtn = document.getElementById("loadGenericExplanationsBtn");
     const clearLogsBtn = document.getElementById("clearLogsBtn");
+    const loadAllGenericExplanationsBtn = document.getElementById("loadAllGenericExplanationsBtn");
 
     loginForm?.addEventListener("submit", onLoginSubmit);
     logoutBtn?.addEventListener("click", onLogoutClick);
@@ -25,7 +27,9 @@ document.addEventListener("DOMContentLoaded", () => {
     fillImportIdBtn?.addEventListener("click", onFillImportIdClick);
     loadLogsBtn?.addEventListener("click", onLoadLogsClick);
     loadErrorLogsBtn?.addEventListener("click", onLoadErrorLogsClick);
+    loadGenericExplanationsBtn?.addEventListener("click", loadGenericExplanations);
     clearLogsBtn?.addEventListener("click", onClearLogsClick);
+    loadAllGenericExplanationsBtn?.addEventListener("click", loadAllGenericExplanations);
 
     initializeApp().catch(err => {
         showMessage(err.message || "Erreur d'initialisation.", "error");
@@ -217,6 +221,203 @@ async function onLoadErrorLogsClick() {
     } catch (e) {
         showMessage(e.message || "Erreur lors du chargement des logs en erreur.", "error");
     }
+}
+
+async function loadGenericExplanations() {
+    const importId =
+        document.getElementById("logFilterImportId")?.value?.trim()
+        || document.getElementById("importIdInput")?.value?.trim();
+
+    const token = localStorage.getItem("accessToken");
+
+    if (!importId) {
+        showMessage("Veuillez saisir un Import ID.", "error");
+        return;
+    }
+
+    if (!/^\d+$/.test(importId)) {
+        showMessage("L'Import ID doit être numérique.", "error");
+        return;
+    }
+
+    if (!token) {
+        showMessage("Vous devez d’abord vous authentifier.", "error");
+        return;
+    }
+
+    try {
+        showMessage("Chargement des logs génériques...", "info");
+
+        const response = await fetch(`/analysis/import/${encodeURIComponent(importId)}/generic-explanations`, {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Accept": "application/json"
+            }
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            showMessage(`Erreur ${response.status} : ${errorText}`, "error");
+            return;
+        }
+
+        const data = await response.json();
+        const logs = Array.isArray(data) ? data : [];
+
+        document.getElementById("logsResultSection")?.classList.remove("hidden");
+
+        const logsSummary = document.getElementById("logsSummary");
+        const container = document.getElementById("logsResult");
+
+        if (!container) return;
+
+        if (!logs.length) {
+            if (logsSummary) {
+                logsSummary.textContent = `Logs génériques trouvés : 0 | importId=${importId}`;
+            }
+
+            container.innerHTML = `<div class="empty-state">Aucun log générique trouvé pour cet import.</div>`;
+            showMessage("Aucun log générique trouvé.", "success");
+            return;
+        }
+
+        const grouped = groupByMessagePattern(logs);
+
+        if (logsSummary) {
+            logsSummary.textContent =
+                `Logs génériques : ${logs.length} | Patterns regroupés : ${grouped.length} | importId=${importId}`;
+        }
+
+        container.innerHTML = grouped.map(g => `
+            <div class="log-card">
+                <b>Occurrences:</b> ${g.count}
+                <br>
+                <b>Pattern:</b>
+                <pre>${escapeHtml(g.pattern)}</pre>
+                <b>Exemple:</b>
+                <pre>${escapeHtml(g.example || "")}</pre>
+            </div>
+        `).join("");
+
+        document.getElementById("logsResultSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        showMessage(`Patterns génériques trouvés : ${grouped.length}`, "success");
+
+    } catch (error) {
+        showMessage("Erreur réseau : " + error.message, "error");
+    }
+}
+async function loadAllGenericExplanations() {
+    const token = localStorage.getItem("accessToken");
+
+    if (!token) {
+        showMessage("Vous devez d’abord vous authentifier.", "error");
+        return;
+    }
+
+    const maxImportId = 250; // augmente si tu as plus d'imports
+    const concurrency = 5;
+
+    const allLogs = [];
+    const container = document.getElementById("logsResult");
+    const logsSummary = document.getElementById("logsSummary");
+
+    document.getElementById("logsResultSection")?.classList.remove("hidden");
+    if (container) container.innerHTML = "";
+    showMessage("Analyse globale import par import...", "info");
+
+    async function loadOneImport(importId) {
+        const response = await fetch(`/analysis/import/${importId}/generic-explanations`, {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Accept": "application/json"
+            }
+        });
+
+        if (!response.ok) {
+            return [];
+        }
+
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
+    }
+
+    for (let i = 1; i <= maxImportId; i += concurrency) {
+        const batch = [];
+
+        for (let id = i; id < i + concurrency && id <= maxImportId; id++) {
+            batch.push(loadOneImport(id));
+        }
+
+        const results = await Promise.all(batch);
+
+        results.forEach(logs => {
+            allLogs.push(...logs);
+        });
+
+        showMessage(`Analyse globale en cours... imports ${i} à ${Math.min(i + concurrency - 1, maxImportId)} / ${maxImportId}`, "info");
+    }
+
+    const grouped = groupByMessagePattern(allLogs);
+
+    if (logsSummary) {
+        logsSummary.textContent =
+            `Logs génériques globaux : ${allLogs.length} | Patterns regroupés : ${grouped.length}`;
+    }
+
+    if (!container) return;
+
+    if (!grouped.length) {
+        container.innerHTML = `<div class="empty-state">Aucun log générique global trouvé.</div>`;
+        showMessage("Aucun log générique global trouvé.", "success");
+        return;
+    }
+
+    container.innerHTML = grouped.map(g => `
+        <div class="log-card">
+            <b>Occurrences:</b> ${g.count}
+            <br>
+            <b>Pattern:</b>
+            <pre>${escapeHtml(g.pattern || "")}</pre>
+            <b>Exemple:</b>
+            <pre>${escapeHtml(g.example || "")}</pre>
+        </div>
+    `).join("");
+
+    showMessage(`Analyse terminée : ${allLogs.length} logs génériques | ${grouped.length} patterns`, "success");
+}
+function groupByMessagePattern(logs) {
+    const map = new Map();
+
+    logs.forEach(log => {
+        let msg = log.message || "";
+
+        msg = msg
+            .replace(/\d+/g, "X")
+            .replace(/\[.*?]/g, "[...]")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const key = msg.substring(0, 160);
+
+        if (!map.has(key)) {
+            map.set(key, {
+                count: 0,
+                example: log.message
+            });
+        }
+
+        map.get(key).count++;
+    });
+
+    return Array.from(map.entries())
+        .map(([pattern, data]) => ({
+            pattern,
+            count: data.count,
+            example: data.example
+        }))
+        .sort((a, b) => b.count - a.count);
 }
 
 function onClearLogsClick() {
@@ -629,24 +830,9 @@ function renderLogCard(log) {
 
             <div class="log-meta">
                 <span class="log-pill ${levelClass}">Level : ${escapeHtml(log.level || "N/A")}</span>
+                <span class="log-pill">Timestamp : ${escapeHtml(log.logTimestamp || "N/A")}</span>
                 <span class="log-pill">Import : ${escapeHtml(log.importId ?? log.logImportId ?? "N/A")}</span>
-                <span class="log-pill">Event : ${escapeHtml(log.eventType || "N/A")}</span>
-                <span class="log-pill">Erreur : ${isError ? "Oui" : "Non"}</span>
-            </div>
-
-            <div class="log-section">
-                <strong>Timestamp</strong>
-                <div>${escapeHtml(log.logTimestamp || "N/A")}</div>
-            </div>
-
-            <div class="log-section">
-                <strong>Process</strong>
-                <div>${escapeHtml(log.processName || "N/A")}</div>
-            </div>
-
-            <div class="log-section">
-                <strong>Source</strong>
-                <div>${escapeHtml(log.sourceClass || "N/A")}</div>
+                ${log.fileName ? `<span class="log-pill">Fichier : ${escapeHtml(log.fileName)}</span>` : ""}
             </div>
 
             <div class="log-section">
@@ -658,6 +844,18 @@ function renderLogCard(log) {
                 <strong>Message réel</strong>
                 <div class="log-message">${escapeHtml(log.message || "")}</div>
             </div>
+
+            <details class="log-details">
+                <summary>Détails techniques</summary>
+                <div class="log-details-grid">
+                    <div><strong>Event Type</strong><div>${escapeHtml(log.eventType || "N/A")}</div></div>
+                    <div><strong>Process</strong><div>${escapeHtml(log.processName || "N/A")}</div></div>
+                    <div><strong>Source</strong><div>${escapeHtml(log.sourceClass || "N/A")}</div></div>
+                    <div><strong>Session</strong><div>${escapeHtml(log.sessionId || "N/A")}</div></div>
+                    <div><strong>UUID</strong><div>${escapeHtml(log.uuid || "N/A")}</div></div>
+                    <div><strong>Erreur</strong><div>${isError ? "Oui" : "Non"}</div></div>
+                </div>
+            </details>
         </div>
     `;
 }
@@ -674,27 +872,6 @@ function getImportIdOrThrow() {
     }
 
     return value;
-}
-
-function getLogFilters(forceErrorOnly) {
-    const importId = document.getElementById("logFilterImportId")?.value?.trim() || "";
-    const fileName = document.getElementById("logFilterFileName")?.value?.trim() || "";
-    const eventType = document.getElementById("logFilterEventType")?.value?.trim() || "";
-    const processName = document.getElementById("logFilterProcessName")?.value?.trim() || "";
-    const sessionId = document.getElementById("logFilterSessionId")?.value?.trim() || "";
-    const uuid = document.getElementById("logFilterUuid")?.value?.trim() || "";
-    const limit = document.getElementById("logFilterLimit")?.value?.trim() || "100";
-    const errorOnly = forceErrorOnly || Boolean(document.getElementById("logFilterErrorOnly")?.checked);
-
-    if (importId && !/^\d+$/.test(importId)) {
-        throw new Error("Le filtre Import ID doit être numérique.");
-    }
-
-    if (limit && !/^\d+$/.test(limit)) {
-        throw new Error("La limite doit être numérique.");
-    }
-
-    return { importId, fileName, eventType, processName, sessionId, uuid, limit, errorOnly };
 }
 
 function toggleWorkflowLines(workflowId) {

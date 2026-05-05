@@ -5,73 +5,77 @@ public class ExtractedLogContext {
     private String extractedUuid;
     private String extractedTransactionId;
     private String extractedFilterCode;
-    private String extractedThreadName;
     private String extractedClassName;
+    private String extractedThreadName;
+
     private Integer extractedRowCount;
     private Long extractedDurationMs;
     private Integer extractedMemoryMo;
 
-    public String getExtractedUuid() {
-        return extractedUuid;
-    }
+    private String extractedTaskName;
+    private String extractedActionName;
+    private String extractedProcessName;
+    private String extractedClientIp;
 
-    public void setExtractedUuid(String extractedUuid) {
-        this.extractedUuid = extractedUuid;
-    }
+    private String extractedTriggerName;
+    private String extractedCheckpoint;
+    private String extractedBusinessObjectKey;
+    private String extractedBusinessObjectValue;
 
-    public String getExtractedTransactionId() {
-        return extractedTransactionId;
-    }
+    private String extractedQueryParameterName;
+    private String extractedQueryParameterValue;
 
-    public void setExtractedTransactionId(String extractedTransactionId) {
-        this.extractedTransactionId = extractedTransactionId;
-    }
+    public String getExtractedUuid() { return extractedUuid; }
+    public void setExtractedUuid(String extractedUuid) { this.extractedUuid = extractedUuid; }
 
-    public String getExtractedFilterCode() {
-        return extractedFilterCode;
-    }
+    public String getExtractedTransactionId() { return extractedTransactionId; }
+    public void setExtractedTransactionId(String extractedTransactionId) { this.extractedTransactionId = extractedTransactionId; }
 
-    public void setExtractedFilterCode(String extractedFilterCode) {
-        this.extractedFilterCode = extractedFilterCode;
-    }
+    public String getExtractedFilterCode() { return extractedFilterCode; }
+    public void setExtractedFilterCode(String extractedFilterCode) { this.extractedFilterCode = extractedFilterCode; }
 
-    public String getExtractedThreadName() {
-        return extractedThreadName;
-    }
+    public String getExtractedClassName() { return extractedClassName; }
+    public void setExtractedClassName(String extractedClassName) { this.extractedClassName = extractedClassName; }
 
-    public void setExtractedThreadName(String extractedThreadName) {
-        this.extractedThreadName = extractedThreadName;
-    }
+    public String getExtractedThreadName() { return extractedThreadName; }
+    public void setExtractedThreadName(String extractedThreadName) { this.extractedThreadName = extractedThreadName; }
 
-    public String getExtractedClassName() {
-        return extractedClassName;
-    }
+    public Integer getExtractedRowCount() { return extractedRowCount; }
+    public void setExtractedRowCount(Integer extractedRowCount) { this.extractedRowCount = extractedRowCount; }
 
-    public void setExtractedClassName(String extractedClassName) {
-        this.extractedClassName = extractedClassName;
-    }
+    public Long getExtractedDurationMs() { return extractedDurationMs; }
+    public void setExtractedDurationMs(Long extractedDurationMs) { this.extractedDurationMs = extractedDurationMs; }
 
-    public Integer getExtractedRowCount() {
-        return extractedRowCount;
-    }
+    public Integer getExtractedMemoryMo() { return extractedMemoryMo; }
+    public void setExtractedMemoryMo(Integer extractedMemoryMo) { this.extractedMemoryMo = extractedMemoryMo; }
 
-    public void setExtractedRowCount(Integer extractedRowCount) {
-        this.extractedRowCount = extractedRowCount;
-    }
+    public String getExtractedTaskName() { return extractedTaskName; }
+    public void setExtractedTaskName(String extractedTaskName) { this.extractedTaskName = extractedTaskName; }
 
-    public Long getExtractedDurationMs() {
-        return extractedDurationMs;
-    }
+    public String getExtractedActionName() { return extractedActionName; }
+    public void setExtractedActionName(String extractedActionName) { this.extractedActionName = extractedActionName; }
 
-    public void setExtractedDurationMs(Long extractedDurationMs) {
-        this.extractedDurationMs = extractedDurationMs;
-    }
+    public String getExtractedProcessName() { return extractedProcessName; }
+    public void setExtractedProcessName(String extractedProcessName) { this.extractedProcessName = extractedProcessName; }
 
-    public Integer getExtractedMemoryMo() {
-        return extractedMemoryMo;
-    }
+    public String getExtractedClientIp() { return extractedClientIp; }
+    public void setExtractedClientIp(String extractedClientIp) { this.extractedClientIp = extractedClientIp; }
 
-    public void setExtractedMemoryMo(Integer extractedMemoryMo) {
-        this.extractedMemoryMo = extractedMemoryMo;
-    }
+    public String getExtractedTriggerName() { return extractedTriggerName; }
+    public void setExtractedTriggerName(String extractedTriggerName) { this.extractedTriggerName = extractedTriggerName; }
+
+    public String getExtractedCheckpoint() { return extractedCheckpoint; }
+    public void setExtractedCheckpoint(String extractedCheckpoint) { this.extractedCheckpoint = extractedCheckpoint; }
+
+    public String getExtractedBusinessObjectKey() { return extractedBusinessObjectKey; }
+    public void setExtractedBusinessObjectKey(String extractedBusinessObjectKey) { this.extractedBusinessObjectKey = extractedBusinessObjectKey; }
+
+    public String getExtractedBusinessObjectValue() { return extractedBusinessObjectValue; }
+    public void setExtractedBusinessObjectValue(String extractedBusinessObjectValue) { this.extractedBusinessObjectValue = extractedBusinessObjectValue; }
+
+    public String getExtractedQueryParameterName() { return extractedQueryParameterName; }
+    public void setExtractedQueryParameterName(String extractedQueryParameterName) { this.extractedQueryParameterName = extractedQueryParameterName; }
+
+    public String getExtractedQueryParameterValue() { return extractedQueryParameterValue; }
+    public void setExtractedQueryParameterValue(String extractedQueryParameterValue) { this.extractedQueryParameterValue = extractedQueryParameterValue; }
 }

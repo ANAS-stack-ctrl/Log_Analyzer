@@ -2,10 +2,14 @@ package com.caciopee.loganalyzer.service;
 
 import com.caciopee.loganalyzer.dto.*;
 import com.caciopee.loganalyzer.entity.LogEntry;
+import com.caciopee.loganalyzer.entity.LogEventType;
 import com.caciopee.loganalyzer.entity.LogImport;
 import com.caciopee.loganalyzer.repository.LogEntryRepository;
 import com.caciopee.loganalyzer.repository.LogImportRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -16,11 +20,14 @@ public class LogAnalysisService {
 
     private final LogEntryRepository logEntryRepository;
     private final LogImportRepository logImportRepository;
+    private final LogBusinessExplanationService logBusinessExplanationService;
 
     public LogAnalysisService(LogEntryRepository logEntryRepository,
-                              LogImportRepository logImportRepository) {
+                              LogImportRepository logImportRepository,
+                              LogBusinessExplanationService logBusinessExplanationService) {
         this.logEntryRepository = logEntryRepository;
         this.logImportRepository = logImportRepository;
+        this.logBusinessExplanationService = logBusinessExplanationService;
     }
 
     public ImportAnalysisSummaryDto getImportSummary(Long importId) {
@@ -148,6 +155,30 @@ public class LogAnalysisService {
                 .thenComparing(IncidentCandidateDto::getFirstTimestamp, Comparator.nullsLast(Comparator.reverseOrder())));
 
         return incidents;
+    }
+
+    public List<LogEntryViewDto> getGenericExplanations(Long importId) {
+        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
+
+        return logs.stream()
+                .map(log -> {
+                    String explanation = logBusinessExplanationService.explain(
+                            toLogEventType(log.getEventType()),
+                            log.getMessage(),
+                            log.getProcessName(),
+                            log.getSourceClass(),
+                            log.getLevel(),
+                            log.getBusinessMeaning()
+                    );
+
+                    if (!isGenericExplanation(explanation)) {
+                        return null;
+                    }
+
+                    return toLogEntryViewDto(log, explanation);
+                })
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private ExecutionStoryDto buildStory(String storyType,
@@ -528,6 +559,58 @@ public class LogAnalysisService {
         return null;
     }
 
+    private boolean isGenericExplanation(String explanation) {
+        if (explanation == null || explanation.isBlank()) {
+            return true;
+        }
+
+        String lower = explanation.toLowerCase();
+
+        return lower.contains("message générique")
+                || lower.contains("événement détecté dans les logs")
+                || lower.contains("une étape technique ou métier a été mesurée")
+                || lower.contains("le message doit être inspecté")
+                || lower.contains("message vide ou non exploitable")
+                || lower.contains("non exploitable");
+    }
+
+    private LogEntryViewDto toLogEntryViewDto(LogEntry log, String explanation) {
+        LogEntryViewDto dto = new LogEntryViewDto();
+
+        dto.setId(log.getId());
+        dto.setImportId(log.getLogImport() != null ? log.getLogImport().getId() : null);
+        dto.setLogTimestamp(log.getLogTimestamp());
+        dto.setLevel(log.getLevel());
+        dto.setProcessName(log.getProcessName());
+        dto.setSourceClass(log.getSourceClass());
+        dto.setMessage(log.getMessage());
+        dto.setEventType(log.getEventType());
+        dto.setBusinessMeaning(explanation);
+        dto.setSessionId(log.getSessionId());
+        dto.setCorrelationId(log.getUserCorrelationId());
+
+        if (log.getLogImport() != null) {
+            dto.setFileName(log.getLogImport().getFileName());
+        }
+
+        dto.setUuid(null);
+        dto.setIsError(log.getIsError());
+
+        return dto;
+    }
+
+    private LogEventType toLogEventType(String eventType) {
+        if (eventType == null || eventType.isBlank()) {
+            return null;
+        }
+
+        try {
+            return LogEventType.valueOf(eventType.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     private boolean notBlank(String s) {
         return s != null && !s.trim().isEmpty();
     }
@@ -546,5 +629,103 @@ public class LogAnalysisService {
 
     private double round2(double value) {
         return Math.round(value * 100.0) / 100.0;
+    }
+    public List<LogEntryViewDto> getAllGenericExplanations(Long startId, Long endId) {
+        List<LogEntry> logs = logEntryRepository.findByIdBetweenOrderByIdAsc(startId, endId);
+
+        return logs.stream()
+                .map(log -> {
+                    String explanation = logBusinessExplanationService.explain(
+                            toLogEventType(log.getEventType()),
+                            log.getMessage(),
+                            log.getProcessName(),
+                            log.getSourceClass(),
+                            log.getLevel(),
+                            log.getBusinessMeaning()
+                    );
+
+                    if (!isGenericExplanation(explanation)) {
+                        return null;
+                    }
+
+                    return toLogEntryViewDto(log, explanation);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+    public List<GenericPatternDto> getGroupedGenericExplanations(int pageSize, int maxPatterns) {
+        Map<String, PatternAcc> grouped = new LinkedHashMap<>();
+
+        int pageNumber = 0;
+        Page<LogEntry> page;
+
+        do {
+            page = logEntryRepository.findAll(
+                    PageRequest.of(pageNumber, pageSize, Sort.by("id").ascending())
+            );
+
+            for (LogEntry log : page.getContent()) {
+                String explanation = logBusinessExplanationService.explain(
+                        toLogEventType(log.getEventType()),
+                        log.getMessage(),
+                        log.getProcessName(),
+                        log.getSourceClass(),
+                        log.getLevel(),
+                        log.getBusinessMeaning()
+                );
+
+                if (!isGenericExplanation(explanation)) {
+                    continue;
+                }
+
+                String pattern = normalizePattern(log.getMessage());
+
+                PatternAcc acc = grouped.computeIfAbsent(pattern, k ->
+                        new PatternAcc(pattern, log.getMessage(), log.getLogImport() != null ? log.getLogImport().getId() : null)
+                );
+
+                acc.count++;
+            }
+
+            pageNumber++;
+
+        } while (page.hasNext());
+
+        return grouped.values().stream()
+                .sorted((a, b) -> Long.compare(b.count, a.count))
+                .limit(maxPatterns)
+                .map(a -> new GenericPatternDto(a.pattern, a.count, a.example, a.importId))
+                .toList();
+    }
+
+    private String normalizePattern(String message) {
+        if (message == null || message.isBlank()) {
+            return "";
+        }
+
+        String normalized = message
+                .replaceAll("\\d+", "X")
+                .replaceAll("\\[.*?]", "[...]")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        if (normalized.length() > 180) {
+            return normalized.substring(0, 180);
+        }
+
+        return normalized;
+    }
+
+    private static class PatternAcc {
+        String pattern;
+        long count;
+        String example;
+        Long importId;
+
+        PatternAcc(String pattern, String example, Long importId) {
+            this.pattern = pattern;
+            this.example = example;
+            this.importId = importId;
+        }
     }
 }

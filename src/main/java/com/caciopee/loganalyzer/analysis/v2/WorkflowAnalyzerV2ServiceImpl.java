@@ -44,11 +44,10 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
 
         List<WorkflowV2SummaryDto> summaries = groups.stream()
                 .map(this::analyzeGroup)
-                .sorted(Comparator
-                        .comparing(WorkflowV2SummaryDto::getHasRuleProblem, Comparator.nullsLast(Boolean::compareTo)).reversed()
-                        .thenComparing(WorkflowV2SummaryDto::getHasPerformanceProblem, Comparator.nullsLast(Boolean::compareTo)).reversed()
-                        .thenComparing(WorkflowV2SummaryDto::getHasZeroResult, Comparator.nullsLast(Boolean::compareTo)).reversed()
-                        .thenComparing(WorkflowV2SummaryDto::getTotalDurationMs, Comparator.nullsLast(Long::compareTo)).reversed())
+                .sorted(Comparator.comparing(
+                        s -> firstTimelineTimestamp(s.getTimeline()),
+                        Comparator.nullsLast(String::compareTo)
+                ))
                 .toList();
 
         WorkflowV2ResponseDto response = new WorkflowV2ResponseDto();
@@ -140,7 +139,9 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
         return event.getWorkflowEventType() == WorkflowEventType.WARNING
                 || event.getWorkflowEventType() == WorkflowEventType.RULE_WARNING
                 || event.getWorkflowEventType() == WorkflowEventType.RULE_NOT_FOUND
-                || event.getWorkflowEventType() == WorkflowEventType.ZERO_RESULT;
+                || event.getWorkflowEventType() == WorkflowEventType.ZERO_RESULT
+                || event.getWorkflowEventType() == WorkflowEventType.HIGH_MEMORY_USAGE
+                || event.getWorkflowEventType() == WorkflowEventType.SLOW_STEP;
     }
 
     private boolean isErrorEvent(WorkflowEventV2 event) {
@@ -177,7 +178,9 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
 
         return events.stream().anyMatch(e ->
                 e.getWorkflowEventType() == WorkflowEventType.SLOW_STEP
+                        || e.getWorkflowEventType() == WorkflowEventType.HIGH_MEMORY_USAGE
                         || (e.getDurationMs() != null && e.getDurationMs() >= 2000)
+                        || (e.getMemoryMo() != null && e.getMemoryMo() >= 3500)
         );
     }
 
@@ -211,6 +214,15 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
 
         for (WorkflowEventV2 event : events) {
             String msg = event.getMessage();
+
+            addInput(inputs, "user", event.getUserName());
+            addInput(inputs, "clientIp", event.getExtractedClientIp());
+            addInput(inputs, "taskName", event.getExtractedTaskName());
+            addInput(inputs, "actionName", event.getExtractedActionName());
+            addInput(inputs, "checkpoint", event.getExtractedCheckpoint());
+            addInput(inputs, event.getExtractedBusinessObjectKey(), event.getExtractedBusinessObjectValue());
+            addInput(inputs, event.getExtractedQueryParameterName(), event.getExtractedQueryParameterValue());
+
             if (msg == null) continue;
 
             Matcher m = p.matcher(msg);
@@ -229,13 +241,49 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             }
         }
 
-        return new ArrayList<>(inputs).stream().limit(15).toList();
+        return new ArrayList<>(inputs).stream().limit(20).toList();
+    }
+
+    private void addInput(Set<String> inputs, String key, String value) {
+        if (key == null || key.isBlank() || value == null || value.isBlank()) return;
+        inputs.add(key + " = " + value);
     }
 
     private String buildUserIntentSummary(WorkflowGroupV2 group, WorkflowV2SummaryDto dto, List<WorkflowEventV2> events) {
         String filter = safe(group.getFilterCode(), "");
         String clazz = safe(group.getClassName(), "");
         String process = safe(group.getProcessName(), "");
+
+        Optional<WorkflowEventV2> richEvent = events.stream()
+                .filter(e -> notBlank(e.getExtractedTaskName()) || notBlank(e.getExtractedActionName()))
+                .findFirst();
+
+        if (richEvent.isPresent()) {
+            WorkflowEventV2 e = richEvent.get();
+            String task = safe(e.getExtractedTaskName(), filter);
+            String action = safe(e.getExtractedActionName(), "");
+            String user = safe(e.getUserName(), "utilisateur non identifié");
+            String ip = safe(e.getExtractedClientIp(), "");
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Le workflow semble avoir été déclenché par ").append(user);
+
+            if (!ip.isBlank()) {
+                sb.append(" depuis l’adresse ").append(ip);
+            }
+
+            if (!task.isBlank()) {
+                sb.append(" sur la tâche ou le traitement '").append(task).append("'");
+            }
+
+            if (!action.isBlank()) {
+                sb.append(" avec l’action '").append(action).append("'");
+            }
+
+            sb.append(".");
+
+            return sb.toString();
+        }
 
         if (events.stream().anyMatch(e -> e.getWorkflowEventType() == WorkflowEventType.CALL_SAVE
                 || e.getWorkflowEventType() == WorkflowEventType.SAVE_OR_UPDATE_START
@@ -300,27 +348,22 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             parts.add("un traitement automatique a été lancé");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.BEFORE_LOAD_START,
-                WorkflowEventType.BEFORE_LOAD_END)) {
+        if (hasAnyEvent(events, WorkflowEventType.TRIGGER_FIRED, WorkflowEventType.TRIGGER_COMPLETED, WorkflowEventType.CACHE_CLEANER)) {
+            parts.add("un trigger système ou une tâche automatique a été exécuté");
+        }
+
+        if (hasAnyEvent(events, WorkflowEventType.BEFORE_LOAD_START, WorkflowEventType.BEFORE_LOAD_END)) {
             parts.add("une phase BEFORE_LOAD a été exécutée");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.RULE_START,
-                WorkflowEventType.RULE_END,
-                WorkflowEventType.RULE_WARNING,
-                WorkflowEventType.RULE_NOT_FOUND)) {
+        if (hasAnyEvent(events, WorkflowEventType.RULE_START, WorkflowEventType.RULE_END,
+                WorkflowEventType.RULE_WARNING, WorkflowEventType.RULE_NOT_FOUND, WorkflowEventType.RULE_DETAIL)) {
             parts.add("une phase de règles métier a été traitée");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.SEARCH_BY_ROOT_START,
-                WorkflowEventType.SEARCH_BY_ROOT_END,
-                WorkflowEventType.SEARCH_START,
-                WorkflowEventType.SEARCH_END,
-                WorkflowEventType.REQUEST_START,
-                WorkflowEventType.REQUEST_END)) {
+        if (hasAnyEvent(events, WorkflowEventType.SEARCH_BY_ROOT_START, WorkflowEventType.SEARCH_BY_ROOT_END,
+                WorkflowEventType.SEARCH_START, WorkflowEventType.SEARCH_END,
+                WorkflowEventType.REQUEST_START, WorkflowEventType.REQUEST_END)) {
             parts.add("une recherche métier a été exécutée");
         }
 
@@ -328,32 +371,62 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             parts.add("une ou plusieurs requêtes SQL ont été exécutées");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.TEMP_QUERY,
-                WorkflowEventType.TEMP_SAVE)) {
+        if (hasAnyEvent(events, WorkflowEventType.TEMP_QUERY, WorkflowEventType.TEMP_SAVE)) {
             parts.add("des données temporaires ont été utilisées pour le chargement");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.LOAD_START,
-                WorkflowEventType.LOAD_QUERY,
-                WorkflowEventType.LOAD_FILLING,
-                WorkflowEventType.LOAD_END)) {
+        if (hasAnyEvent(events, WorkflowEventType.LOAD_START, WorkflowEventType.LOAD_QUERY,
+                WorkflowEventType.LOAD_FILLING, WorkflowEventType.LOAD_END)) {
             parts.add("les données ont été chargées puis remplies");
         }
 
-        if (hasAnyEvent(events,
-                WorkflowEventType.SAVE_PROCESS_CONTENT,
-                WorkflowEventType.SAVE_START,
-                WorkflowEventType.SAVE_END,
-                WorkflowEventType.SAVE_OR_UPDATE_START,
-                WorkflowEventType.SAVE_OR_UPDATE_END,
-                WorkflowEventType.SAVE_INSTANCE_OPERATION,
-                WorkflowEventType.SAVE_RELATION_OPERATION,
-                WorkflowEventType.SAVE_TOTAL_TIME)) {
+        if (hasAnyEvent(events, WorkflowEventType.AGGREGATION_START,
+                WorkflowEventType.AGGREGATION_END, WorkflowEventType.RENDERING_RESULT)) {
+            parts.add("les données ont été agrégées puis préparées pour l’affichage");
+        }
+
+        if (hasAnyEvent(events, WorkflowEventType.SAVE_PROCESS_CONTENT, WorkflowEventType.SAVE_START,
+                WorkflowEventType.SAVE_END, WorkflowEventType.SAVE_OR_UPDATE_START,
+                WorkflowEventType.SAVE_OR_UPDATE_END, WorkflowEventType.SAVE_INSTANCE_OPERATION,
+                WorkflowEventType.SAVE_RELATION_OPERATION, WorkflowEventType.SAVE_TOTAL_TIME,
+                WorkflowEventType.DOCUMENT_SAVE)) {
             parts.add("une phase de sauvegarde a été détectée");
         }
 
+        if (hasEvent(events, WorkflowEventType.CHECKPOINT)) {
+            parts.add("des checkpoints métier ont été détectés");
+        }
+        if (hasAnyEvent(events,
+                WorkflowEventType.STRUCTURING_LOOP_START,
+                WorkflowEventType.NEW_INTERFACE_OBJECT,
+                WorkflowEventType.STRUCTURE_DATA_START,
+                WorkflowEventType.STRUCTURING_FIELD_START,
+                WorkflowEventType.FINAL_OBJECT_FIELD_PUT)) {
+            parts.add("le système a structuré des objets métier à partir des données d’interface");
+        }
+
+        if (hasAnyEvent(events,
+                WorkflowEventType.RELATION_PRESENT,
+                WorkflowEventType.RELATION_FIRST_ADDED,
+                WorkflowEventType.RELATION_KEY_CREATED,
+                WorkflowEventType.RELATION_DATA_ATTACHED)) {
+            parts.add("des relations métier ont été construites entre les objets");
+        }
+
+        if (hasAnyEvent(events,
+                WorkflowEventType.MANDATORY_CHECK_START,
+                WorkflowEventType.MANDATORY_FIELDS_LIST,
+                WorkflowEventType.MANDATORY_FIELD_CHECK,
+                WorkflowEventType.MANDATORY_CHECK_SUCCESS)) {
+            parts.add("les champs obligatoires ont été vérifiés");
+        }
+
+        if (hasAnyEvent(events,
+                WorkflowEventType.PM_PP_NULL_ERROR,
+                WorkflowEventType.ERROR_DETAILS_EXTRACTED,
+                WorkflowEventType.BUSINESS_KEY_NULL)) {
+            parts.add("une anomalie métier liée au mapping ou à la clé métier a été détectée");
+        }
         StringBuilder sb = new StringBuilder();
 
         if (parts.isEmpty()) {
@@ -411,15 +484,44 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
         }
 
         if (Boolean.TRUE.equals(dto.getHasRuleProblem())) {
+            Optional<WorkflowEventV2> ruleIssue = events.stream()
+                    .filter(this::isRuleProblemEvent)
+                    .findFirst();
+
+            if (ruleIssue.isPresent()) {
+                WorkflowEventV2 e = ruleIssue.get();
+                String task = safe(e.getExtractedTaskName(), safe(e.getFilterCode(), "tâche inconnue"));
+                String action = safe(e.getExtractedActionName(), "action inconnue");
+                return "Cause probable : aucune règle métier n’est configurée pour la tâche '" + task + "' avec l’action '" + action + "'.";
+            }
+
             return "Cause probable : aucune règle métier n’est configurée pour cette transition, ce traitement ou cette action.";
         }
 
         if (Boolean.TRUE.equals(dto.getHasZeroResult())) {
+            Optional<WorkflowEventV2> zero = events.stream()
+                    .filter(e -> e.getWorkflowEventType() == WorkflowEventType.ZERO_RESULT)
+                    .findFirst();
+
+            if (zero.isPresent()) {
+                WorkflowEventV2 e = zero.get();
+                String filter = safe(e.getFilterCode(), "filtre inconnu");
+                String param = "";
+                if (notBlank(e.getExtractedQueryParameterName()) && notBlank(e.getExtractedQueryParameterValue())) {
+                    param = " Paramètre détecté : " + e.getExtractedQueryParameterName() + " = " + e.getExtractedQueryParameterValue() + ".";
+                }
+                return "Cause probable : le filtre '" + filter + "' n’a trouvé aucune donnée correspondant aux critères de recherche." + param;
+            }
+
             return "Cause probable : les critères de recherche ne correspondent à aucune donnée existante, ou les données attendues ne sont pas encore présentes.";
         }
 
+        if (events.stream().anyMatch(e -> e.getWorkflowEventType() == WorkflowEventType.HIGH_MEMORY_USAGE)) {
+            return "Cause probable : consommation mémoire très élevée pendant le chargement ou le traitement des données.";
+        }
+
         if (events.stream().anyMatch(e -> e.getWorkflowEventType() == WorkflowEventType.SLOW_STEP)) {
-            return "Cause probable : une étape lente a été détectée, probablement liée à une requête SQL ou à un volume de données important.";
+            return "Cause probable : une étape lente a été détectée, probablement liée à une requête SQL, un chargement volumineux ou une phase de sauvegarde.";
         }
 
         if (Boolean.TRUE.equals(dto.getHasPerformanceProblem())) {
@@ -443,7 +545,7 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
         }
 
         if (Boolean.TRUE.equals(dto.getHasPerformanceProblem())) {
-            return "Vérifier les requêtes SQL lentes, le nombre de lignes retournées, les étapes de chargement et les sauvegardes.";
+            return "Vérifier les requêtes SQL lentes, le nombre de lignes retournées, les étapes de chargement, la consommation mémoire et les sauvegardes.";
         }
 
         return "Aucune action urgente. Ce workflow peut servir de comportement de référence.";
@@ -477,6 +579,37 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             case WORKFLOW_START -> "début du workflow.";
             case WORKFLOW_END -> "fin du workflow.";
 
+            case STRUCTURING_LOOP_START -> "début du traitement des objets d’interface.";
+            case NEW_INTERFACE_OBJECT -> "nouvel objet d’interface détecté.";
+            case STRUCTURE_DATA_START -> "début de structuration d’un objet métier.";
+            case STRUCTURE_DATA_END -> "fin de structuration d’un objet métier.";
+            case STRUCTURING_FIELD_START -> "début du mapping d’un champ d’interface vers un champ métier.";
+            case FIELD_TRIM_REQUIRED -> "nettoyage de la valeur du champ avant conversion.";
+            case FIELD_CLASS_CODE_DETECTED -> "code interne du champ métier identifié.";
+            case FIELD_VALUE_READ -> "lecture d’une valeur depuis l’interface.";
+            case TYPE_CONVERSION_START -> "conversion de la valeur vers le type attendu.";
+            case TYPE_CONVERSION_SUCCESS -> "conversion de type réussie.";
+            case TYPE_CONVERSION_NULL -> "conversion impossible ou valeur convertie en null.";
+            case FINAL_OBJECT_FIELD_PUT -> "champ injecté dans l’objet métier final.";
+
+            case RELATION_PRESENT -> "relation métier à construire détectée.";
+            case RELATION_ABSENT -> "aucune relation métier à construire pour ce champ.";
+            case RELATION_FIRST_ADDED -> "première relation métier ajoutée.";
+            case RELATION_KEY_CREATED -> "clé de relation métier créée.";
+            case RELATION_KEY_ATTACHED -> "clé de relation rattachée à l’objet.";
+            case RELATION_DATA_ATTACHED -> "données de relation ajoutées à l’objet métier.";
+            case RELATION_DELETE -> "des relations métier ont été supprimées ou nettoyées.";
+            case RELATION_SAVE -> "des relations métier ont été enregistrées.";
+
+            case MANDATORY_CHECK_START -> "début de vérification des champs obligatoires.";
+            case MANDATORY_FIELDS_LIST -> "liste des champs obligatoires détectée.";
+            case MANDATORY_FIELD_CHECK -> "vérification d’un champ obligatoire.";
+            case MANDATORY_CHECK_SUCCESS -> "les champs obligatoires sont respectés.";
+            case BUSINESS_KEY_NULL -> "clé métier manquante ou nulle.";
+
+            case PM_PP_NULL_ERROR -> "erreur métier : une donnée PP/PM nécessaire au mapping est absente.";
+            case ERROR_DETAILS_EXTRACTED -> "détails de l’erreur métier extraits : colonne, attribut, valeur et clé métier impactée.";
+
             case CALL_RUN_RULES -> "un appel distant a demandé l’exécution des règles métier.";
             case CALL_EXECUTE_FILTER -> "un appel distant a demandé l’exécution d’un filtre métier.";
             case CALL_SAVE -> "un appel distant a demandé une sauvegarde métier.";
@@ -493,6 +626,7 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             case RULE_START -> "début de l’exécution des règles métier.";
             case RULE_END -> "fin de l’exécution des règles métier.";
             case RULE_WARNING, RULE_NOT_FOUND -> "aucune règle métier applicable n’a été trouvée pour cette transition.";
+            case RULE_DETAIL -> "détail d’exécution d’une règle métier.";
 
             case REQUEST_START -> "début d’exécution d’une requête de recherche.";
             case REQUEST_END -> "fin d’exécution d’une requête de recherche.";
@@ -512,12 +646,17 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             case LOAD_FILLING -> "remplissage des données récupérées.";
             case LOAD_END -> "fin du chargement des données.";
 
+            case AGGREGATION_START -> "début de l’agrégation des données métier.";
+            case AGGREGATION_END -> "fin de l’agrégation des données métier.";
+            case RENDERING_RESULT -> "le système a préparé le résultat à afficher à l’utilisateur.";
+
             case MULTITHREADING_ENABLED -> "le traitement utilise le multithreading.";
             case MULTITHREADING_SKIPPED -> "le multithreading a été ignoré, probablement car le volume est faible.";
             case THREAD_COMPLETED -> "un thread de traitement s’est terminé.";
             case SESSION_CLOSED -> "une session technique a été fermée.";
 
             case MEMORY_USAGE -> "la mémoire observée est de " + safeInt(event.getMemoryMo()) + " Mo.";
+            case HIGH_MEMORY_USAGE -> "consommation mémoire élevée détectée : " + safeInt(event.getMemoryMo()) + " Mo.";
             case PERFORMANCE -> "une durée mesurée de " + safeLong(event.getDurationMs()) + " ms a été observée.";
             case SLOW_STEP -> "une étape lente a été détectée : " + safeLong(event.getDurationMs()) + " ms.";
 
@@ -529,16 +668,29 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
             case SAVE_INSTANCE_OPERATION -> "l’instance métier principale a été sauvegardée.";
             case SAVE_RELATION_OPERATION -> "des relations métier ont été sauvegardées.";
             case SAVE_TOTAL_TIME -> "le temps total de sauvegarde a été calculé.";
-            case RELATION_DELETE -> "des relations métier ont été supprimées ou nettoyées.";
-            case RELATION_SAVE -> "des relations métier ont été enregistrées.";
+            case DOCUMENT_SAVE -> "des documents ont été sauvegardés.";
 
-            case CHECKPOINT -> "un checkpoint métier a été atteint.";
+            case CHECKPOINT -> checkpointSentence(event);
+            case TRIGGER_FIRED -> "un déclencheur automatique système a été lancé.";
+            case TRIGGER_COMPLETED -> "un déclencheur automatique système s’est terminé.";
+            case CACHE_CLEANER -> "un nettoyage automatique du cache a été exécuté.";
+            case JBPM_ASSIGNMENT -> "une affectation JBPM a été détectée.";
+
             case ERROR -> "une erreur a été détectée.";
             case WARNING -> "un avertissement a été détecté.";
             case BUSINESS_INFO -> shortenMessage(event.getMessage());
             case TECHNICAL_INFO -> null;
             case UNKNOWN -> shortenMessage(event.getMessage());
+            default -> shortenMessage(event.getMessage());
         };
+
+    }
+
+    private String checkpointSentence(WorkflowEventV2 event) {
+        if (notBlank(event.getExtractedCheckpoint())) {
+            return "checkpoint métier détecté : " + event.getExtractedCheckpoint() + ".";
+        }
+        return "un checkpoint métier a été atteint.";
     }
 
     private List<WorkflowV2LineDto> buildLineDtos(List<WorkflowEventV2> events) {
@@ -586,6 +738,10 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
         return cleaned.substring(0, 177) + "...";
     }
 
+    private boolean notBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
     private String safe(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
     }
@@ -596,5 +752,19 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
 
     private long safeLong(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private String firstTimelineTimestamp(List<String> timeline) {
+        if (timeline == null || timeline.isEmpty()) {
+            return null;
+        }
+
+        String first = timeline.get(0);
+
+        if (first == null || first.length() < 19) {
+            return null;
+        }
+
+        return first.substring(0, 19);
     }
 }

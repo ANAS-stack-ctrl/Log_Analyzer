@@ -10,6 +10,7 @@ public class WorkflowEventV2 {
     private LocalDateTime timestamp;
 
     private String level;
+    private String userName;
     private String processName;
     private String sourceClass;
     private String message;
@@ -29,157 +30,106 @@ public class WorkflowEventV2 {
     private Long durationMs;
     private Integer memoryMo;
 
+    private String extractedTaskName;
+    private String extractedActionName;
+    private String extractedProcessName;
+    private String extractedClientIp;
+    private String extractedTriggerName;
+    private String extractedCheckpoint;
+    private String extractedBusinessObjectKey;
+    private String extractedBusinessObjectValue;
+    private String extractedQueryParameterName;
+    private String extractedQueryParameterValue;
+
     private WorkflowEventType workflowEventType;
 
-    public Long getLogEntryId() {
-        return logEntryId;
-    }
+    public Long getLogEntryId() { return logEntryId; }
+    public void setLogEntryId(Long logEntryId) { this.logEntryId = logEntryId; }
 
-    public void setLogEntryId(Long logEntryId) {
-        this.logEntryId = logEntryId;
-    }
+    public LocalDateTime getTimestamp() { return timestamp; }
+    public void setTimestamp(LocalDateTime timestamp) { this.timestamp = timestamp; }
 
-    public LocalDateTime getTimestamp() {
-        return timestamp;
-    }
+    public String getLevel() { return level; }
+    public void setLevel(String level) { this.level = level; }
 
-    public void setTimestamp(LocalDateTime timestamp) {
-        this.timestamp = timestamp;
-    }
+    public String getUserName() { return userName; }
+    public void setUserName(String userName) { this.userName = userName; }
 
-    public String getLevel() {
-        return level;
-    }
+    public String getProcessName() { return processName; }
+    public void setProcessName(String processName) { this.processName = processName; }
 
-    public void setLevel(String level) {
-        this.level = level;
-    }
+    public String getSourceClass() { return sourceClass; }
+    public void setSourceClass(String sourceClass) { this.sourceClass = sourceClass; }
 
-    public String getProcessName() {
-        return processName;
-    }
+    public String getMessage() { return message; }
+    public void setMessage(String message) { this.message = message; }
 
-    public void setProcessName(String processName) {
-        this.processName = processName;
-    }
+    public String getEventTypeFromParser() { return eventTypeFromParser; }
+    public void setEventTypeFromParser(String eventTypeFromParser) { this.eventTypeFromParser = eventTypeFromParser; }
 
-    public String getSourceClass() {
-        return sourceClass;
-    }
+    public String getCorrelationId() { return correlationId; }
+    public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
 
-    public void setSourceClass(String sourceClass) {
-        this.sourceClass = sourceClass;
-    }
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
-    public String getMessage() {
-        return message;
-    }
+    public String getBusinessKey() { return businessKey; }
+    public void setBusinessKey(String businessKey) { this.businessKey = businessKey; }
 
-    public void setMessage(String message) {
-        this.message = message;
-    }
+    public String getUuid() { return uuid; }
+    public void setUuid(String uuid) { this.uuid = uuid; }
 
-    public String getEventTypeFromParser() {
-        return eventTypeFromParser;
-    }
+    public String getTransactionId() { return transactionId; }
+    public void setTransactionId(String transactionId) { this.transactionId = transactionId; }
 
-    public void setEventTypeFromParser(String eventTypeFromParser) {
-        this.eventTypeFromParser = eventTypeFromParser;
-    }
+    public String getFilterCode() { return filterCode; }
+    public void setFilterCode(String filterCode) { this.filterCode = filterCode; }
 
-    public String getCorrelationId() {
-        return correlationId;
-    }
+    public String getClassName() { return className; }
+    public void setClassName(String className) { this.className = className; }
 
-    public void setCorrelationId(String correlationId) {
-        this.correlationId = correlationId;
-    }
+    public String getThreadName() { return threadName; }
+    public void setThreadName(String threadName) { this.threadName = threadName; }
 
-    public String getSessionId() {
-        return sessionId;
-    }
+    public Integer getRowCount() { return rowCount; }
+    public void setRowCount(Integer rowCount) { this.rowCount = rowCount; }
 
-    public void setSessionId(String sessionId) {
-        this.sessionId = sessionId;
-    }
+    public Long getDurationMs() { return durationMs; }
+    public void setDurationMs(Long durationMs) { this.durationMs = durationMs; }
 
-    public String getBusinessKey() {
-        return businessKey;
-    }
+    public Integer getMemoryMo() { return memoryMo; }
+    public void setMemoryMo(Integer memoryMo) { this.memoryMo = memoryMo; }
 
-    public void setBusinessKey(String businessKey) {
-        this.businessKey = businessKey;
-    }
+    public String getExtractedTaskName() { return extractedTaskName; }
+    public void setExtractedTaskName(String extractedTaskName) { this.extractedTaskName = extractedTaskName; }
 
-    public String getUuid() {
-        return uuid;
-    }
+    public String getExtractedActionName() { return extractedActionName; }
+    public void setExtractedActionName(String extractedActionName) { this.extractedActionName = extractedActionName; }
 
-    public void setUuid(String uuid) {
-        this.uuid = uuid;
-    }
+    public String getExtractedProcessName() { return extractedProcessName; }
+    public void setExtractedProcessName(String extractedProcessName) { this.extractedProcessName = extractedProcessName; }
 
-    public String getTransactionId() {
-        return transactionId;
-    }
+    public String getExtractedClientIp() { return extractedClientIp; }
+    public void setExtractedClientIp(String extractedClientIp) { this.extractedClientIp = extractedClientIp; }
 
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
-    }
+    public String getExtractedTriggerName() { return extractedTriggerName; }
+    public void setExtractedTriggerName(String extractedTriggerName) { this.extractedTriggerName = extractedTriggerName; }
 
-    public String getFilterCode() {
-        return filterCode;
-    }
+    public String getExtractedCheckpoint() { return extractedCheckpoint; }
+    public void setExtractedCheckpoint(String extractedCheckpoint) { this.extractedCheckpoint = extractedCheckpoint; }
 
-    public void setFilterCode(String filterCode) {
-        this.filterCode = filterCode;
-    }
+    public String getExtractedBusinessObjectKey() { return extractedBusinessObjectKey; }
+    public void setExtractedBusinessObjectKey(String extractedBusinessObjectKey) { this.extractedBusinessObjectKey = extractedBusinessObjectKey; }
 
-    public String getClassName() {
-        return className;
-    }
+    public String getExtractedBusinessObjectValue() { return extractedBusinessObjectValue; }
+    public void setExtractedBusinessObjectValue(String extractedBusinessObjectValue) { this.extractedBusinessObjectValue = extractedBusinessObjectValue; }
 
-    public void setClassName(String className) {
-        this.className = className;
-    }
+    public String getExtractedQueryParameterName() { return extractedQueryParameterName; }
+    public void setExtractedQueryParameterName(String extractedQueryParameterName) { this.extractedQueryParameterName = extractedQueryParameterName; }
 
-    public String getThreadName() {
-        return threadName;
-    }
+    public String getExtractedQueryParameterValue() { return extractedQueryParameterValue; }
+    public void setExtractedQueryParameterValue(String extractedQueryParameterValue) { this.extractedQueryParameterValue = extractedQueryParameterValue; }
 
-    public void setThreadName(String threadName) {
-        this.threadName = threadName;
-    }
-
-    public Integer getRowCount() {
-        return rowCount;
-    }
-
-    public void setRowCount(Integer rowCount) {
-        this.rowCount = rowCount;
-    }
-
-    public Long getDurationMs() {
-        return durationMs;
-    }
-
-    public void setDurationMs(Long durationMs) {
-        this.durationMs = durationMs;
-    }
-
-    public Integer getMemoryMo() {
-        return memoryMo;
-    }
-
-    public void setMemoryMo(Integer memoryMo) {
-        this.memoryMo = memoryMo;
-    }
-
-    public WorkflowEventType getWorkflowEventType() {
-        return workflowEventType;
-    }
-
-    public void setWorkflowEventType(WorkflowEventType workflowEventType) {
-        this.workflowEventType = workflowEventType;
-    }
+    public WorkflowEventType getWorkflowEventType() { return workflowEventType; }
+    public void setWorkflowEventType(WorkflowEventType workflowEventType) { this.workflowEventType = workflowEventType; }
 }
