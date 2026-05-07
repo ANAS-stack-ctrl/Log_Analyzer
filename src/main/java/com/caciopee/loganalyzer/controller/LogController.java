@@ -7,6 +7,7 @@ import com.caciopee.loganalyzer.service.LogQueryService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/logs")
@@ -29,6 +30,8 @@ public class LogController {
     public List<LogEntryViewDto> searchLogs(
             @RequestParam(required = false) Long importId,
             @RequestParam(required = false) String fileName,
+            @RequestParam(required = false) List<Long> importIds,
+            @RequestParam(required = false) List<String> fileNames,
             @RequestParam(required = false) Boolean error,
             @RequestParam(required = false) String eventType,
             @RequestParam(required = false) String processName,
@@ -36,9 +39,32 @@ public class LogController {
             @RequestParam(required = false) String uuid,
             @RequestParam(required = false, defaultValue = "100") Integer limit
     ) {
+        List<Long> mergedImportIds = Optional.ofNullable(importIds).orElseGet(List::of);
+        if (importId != null) {
+            mergedImportIds = mergedImportIds.isEmpty() ? List.of(importId) : mergedImportIds;
+        }
+
+        List<String> mergedFileNames = Optional.ofNullable(fileNames).orElseGet(List::of);
+        if (fileName != null && !fileName.isBlank()) {
+            mergedFileNames = mergedFileNames.isEmpty() ? List.of(fileName) : mergedFileNames;
+        }
+
+        if (!mergedImportIds.isEmpty() || !mergedFileNames.isEmpty()) {
+            return logQueryService.searchLogsMulti(
+                    mergedImportIds,
+                    mergedFileNames,
+                    error,
+                    eventType,
+                    processName,
+                    sessionId,
+                    uuid,
+                    limit
+            );
+        }
+
         return logQueryService.searchLogs(
-                importId,
-                fileName,
+                null,
+                null,
                 error,
                 eventType,
                 processName,

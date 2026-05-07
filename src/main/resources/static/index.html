@@ -63,6 +63,14 @@
         <pre id="uploadResult"></pre>
     </section>
 
+    <section class="card hidden" id="importsSection">
+        <div class="card-header-inline">
+            <h2>Fichiers déjà importés</h2>
+            <button id="refreshImportsBtn" type="button" class="secondary-btn">Rafraîchir</button>
+        </div>
+        <div id="importsResult"></div>
+    </section>
+
     <section class="card hidden" id="analysisSection">
         <h2>Analyse par workflow</h2>
 
@@ -75,10 +83,6 @@
 
         <div class="actions wrap">
             <button id="v2Btn" type="button">Analyse V2 compréhensible</button>
-            <button id="humanBtn" type="button" class="secondary-btn">Explication globale</button>
-            <button id="summaryBtn" type="button" class="secondary-btn">Résumé technique</button>
-            <button id="storyBtn" type="button" class="secondary-btn">Story technique</button>
-            <button id="rawBtn" type="button" class="secondary-btn">JSON complet</button>
             <button id="clearAnalysisBtn" type="button" class="danger-btn">Vider l’affichage</button>
         </div>
     </section>
@@ -88,18 +92,13 @@
 
         <div class="log-filter-grid">
             <div class="field">
-                <label for="logFilterImportId">Import ID</label>
-                <input id="logFilterImportId" type="text" placeholder="Ex: 1" />
+                <label for="logFilterImportIds">Import IDs </label>
+                <input id="logFilterImportIds" type="text" placeholder="Ex: 1,2,3" />
             </div>
 
             <div class="field">
-                <label for="logFilterFileName">Nom du fichier</label>
-                <input id="logFilterFileName" type="text" placeholder="Ex: Works_..." />
-            </div>
-
-            <div class="field">
-                <label for="logFilterEventType">Event Type</label>
-                <input id="logFilterEventType" type="text" placeholder="Ex: RULE_NOT_FOUND" />
+                <label for="logFilterFileNames">Noms de fichiers </label>
+                <input id="logFilterFileNames" type="text" placeholder="Ex: Works_1.log, Works_2.log" />
             </div>
 
             <div class="field">

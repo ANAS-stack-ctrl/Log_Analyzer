@@ -2,6 +2,7 @@ package com.caciopee.loganalyzer.repository;
 
 import com.caciopee.loganalyzer.entity.LogEntry;
 import com.caciopee.loganalyzer.entity.LogParseQuality;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
@@ -206,4 +207,11 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
         """)
     List<LogEntry> findByIdBetweenOrderByIdAsc(@Param("startId") Long startId,
                                                @Param("endId") Long endId);
+
+    @Modifying
+    @Query("""
+            delete from LogEntry e
+            where e.logImport.id = :importId
+            """)
+    int deleteByImportId(@Param("importId") Long importId);
 }

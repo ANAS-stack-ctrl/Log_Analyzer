@@ -340,6 +340,38 @@ pre {
     background: #fcfcfd;
 }
 
+.imports-table-wrap {
+    overflow: auto;
+}
+
+.imports-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.imports-table th,
+.imports-table td {
+    border-bottom: 1px solid #e4e7ec;
+    padding: 10px 10px;
+    vertical-align: top;
+    text-align: left;
+}
+
+.imports-table th {
+    color: #344054;
+    font-weight: 800;
+    background: #f9fafb;
+    position: sticky;
+    top: 0;
+}
+
+.imports-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .status-badge {
     display: inline-block;
     padding: 8px 12px;

@@ -2,11 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const loginForm = document.getElementById("loginForm");
     const logoutBtn = document.getElementById("logoutBtn");
     const uploadBtn = document.getElementById("uploadBtn");
-    const humanBtn = document.getElementById("humanBtn");
     const v2Btn = document.getElementById("v2Btn");
-    const summaryBtn = document.getElementById("summaryBtn");
-    const storyBtn = document.getElementById("storyBtn");
-    const rawBtn = document.getElementById("rawBtn");
     const clearAnalysisBtn = document.getElementById("clearAnalysisBtn");
     const fillImportIdBtn = document.getElementById("fillImportIdBtn");
     const loadLogsBtn = document.getElementById("loadLogsBtn");
@@ -14,15 +10,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const loadGenericExplanationsBtn = document.getElementById("loadGenericExplanationsBtn");
     const clearLogsBtn = document.getElementById("clearLogsBtn");
     const loadAllGenericExplanationsBtn = document.getElementById("loadAllGenericExplanationsBtn");
+    const refreshImportsBtn = document.getElementById("refreshImportsBtn");
 
     loginForm?.addEventListener("submit", onLoginSubmit);
     logoutBtn?.addEventListener("click", onLogoutClick);
     uploadBtn?.addEventListener("click", onUploadClick);
-    humanBtn?.addEventListener("click", onHumanClick);
     v2Btn?.addEventListener("click", onV2Click);
-    summaryBtn?.addEventListener("click", onSummaryClick);
-    storyBtn?.addEventListener("click", onStoryClick);
-    rawBtn?.addEventListener("click", onRawClick);
     clearAnalysisBtn?.addEventListener("click", onClearAnalysisClick);
     fillImportIdBtn?.addEventListener("click", onFillImportIdClick);
     loadLogsBtn?.addEventListener("click", onLoadLogsClick);
@@ -30,6 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadGenericExplanationsBtn?.addEventListener("click", loadGenericExplanations);
     clearLogsBtn?.addEventListener("click", onClearLogsClick);
     loadAllGenericExplanationsBtn?.addEventListener("click", loadAllGenericExplanations);
+    refreshImportsBtn?.addEventListener("click", onRefreshImportsClick);
 
     initializeApp().catch(err => {
         showMessage(err.message || "Erreur d'initialisation.", "error");
@@ -47,6 +41,7 @@ async function initializeApp() {
     try {
         await loadCurrentUser();
         showLoggedInUI();
+        await refreshImports();
         showMessage("Session active.", "success");
     } catch (e) {
         clearTokens();
@@ -112,33 +107,21 @@ async function onUploadClick() {
         const extractedImportId = extractLatestImportId(result);
         if (extractedImportId) {
             const importIdInput = document.getElementById("importIdInput");
-            const logFilterImportId = document.getElementById("logFilterImportId");
+            const logFilterImportIds = document.getElementById("logFilterImportIds");
 
             if (importIdInput && !importIdInput.value.trim()) {
                 importIdInput.value = String(extractedImportId);
             }
 
-            if (logFilterImportId && !logFilterImportId.value.trim()) {
-                logFilterImportId.value = String(extractedImportId);
+            if (logFilterImportIds && !logFilterImportIds.value.trim()) {
+                logFilterImportIds.value = String(extractedImportId);
             }
         }
 
         showMessage("Upload terminé avec succès.", "success");
+        await refreshImports();
     } catch (e) {
         showMessage(e.message || "Erreur lors de l'upload.", "error");
-    }
-}
-
-async function onHumanClick() {
-    const importId = getImportIdOrThrow();
-
-    try {
-        showMessage("Explication globale en cours...", "info");
-        const result = await fetchHumanExplanation(importId);
-        renderHumanResult(result);
-        showMessage("Explication globale chargée.", "success");
-    } catch (e) {
-        showMessage(e.message || "Erreur lors de l’explication globale.", "error");
     }
 }
 
@@ -152,45 +135,6 @@ async function onV2Click() {
         showMessage("Analyse V2 chargée.", "success");
     } catch (e) {
         showMessage(e.message || "Erreur lors de l’analyse V2.", "error");
-    }
-}
-
-async function onSummaryClick() {
-    const importId = getImportIdOrThrow();
-
-    try {
-        showMessage("Résumé technique en cours...", "info");
-        const result = await fetchWorkflowSummary(importId);
-        renderRawResult(result);
-        showMessage("Résumé chargé.", "success");
-    } catch (e) {
-        showMessage(e.message || "Erreur lors du résumé.", "error");
-    }
-}
-
-async function onStoryClick() {
-    const importId = getImportIdOrThrow();
-
-    try {
-        showMessage("Story technique en cours...", "info");
-        const result = await fetchWorkflowStory(importId);
-        renderRawResult(result);
-        showMessage("Story chargée.", "success");
-    } catch (e) {
-        showMessage(e.message || "Erreur lors du story engine.", "error");
-    }
-}
-
-async function onRawClick() {
-    const importId = getImportIdOrThrow();
-
-    try {
-        showMessage("Analyse JSON complète en cours...", "info");
-        const result = await fetchWorkflowAnalysis(importId);
-        renderRawResult(result);
-        showMessage("Analyse complète chargée.", "success");
-    } catch (e) {
-        showMessage(e.message || "Erreur lors de l’analyse complète.", "error");
     }
 }
 
@@ -225,8 +169,8 @@ async function onLoadErrorLogsClick() {
 
 async function loadGenericExplanations() {
     const importId =
-        document.getElementById("logFilterImportId")?.value?.trim()
-        || document.getElementById("importIdInput")?.value?.trim();
+        document.getElementById("importIdInput")?.value?.trim()
+        || extractFirstIdFromCsv(document.getElementById("logFilterImportIds")?.value);
 
     const token = localStorage.getItem("accessToken");
 
@@ -456,7 +400,7 @@ function onFillImportIdClick() {
     }
 
     const input = document.getElementById("importIdInput");
-    const logInput = document.getElementById("logFilterImportId");
+    const logInput = document.getElementById("logFilterImportIds");
 
     if (input) input.value = String(importId);
     if (logInput) logInput.value = String(importId);
@@ -504,17 +448,6 @@ async function uploadLogs(fileList) {
     return data;
 }
 
-async function fetchHumanExplanation(importId) {
-    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/human`);
-    const data = await safeJson(response);
-
-    if (!response.ok) {
-        throw new Error(data?.message || "Erreur explication utilisateur.");
-    }
-
-    return data;
-}
-
 async function fetchWorkflowAnalysisV2(importId) {
     const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/v2`);
     const data = await safeJson(response);
@@ -526,44 +459,121 @@ async function fetchWorkflowAnalysisV2(importId) {
     return data;
 }
 
-async function fetchWorkflowAnalysis(importId) {
-    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}`);
-    const data = await safeJson(response);
-
-    if (!response.ok) {
-        throw new Error(data?.message || "Erreur analyse complète.");
+async function onRefreshImportsClick() {
+    try {
+        showMessage("Rafraîchissement des imports...", "info");
+        await refreshImports();
+        showMessage("Imports rafraîchis.", "success");
+    } catch (e) {
+        showMessage(e.message || "Erreur lors du rafraîchissement des imports.", "error");
     }
-
-    return data;
 }
 
-async function fetchWorkflowSummary(importId) {
-    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/summary`);
+async function refreshImports() {
+    const response = await authFetch("/imports");
     const data = await safeJson(response);
 
     if (!response.ok) {
-        throw new Error(data?.message || "Erreur résumé.");
+        throw new Error(data?.message || "Impossible de charger la liste des imports.");
     }
 
-    return data;
+    renderImports(Array.isArray(data) ? data : []);
 }
 
-async function fetchWorkflowStory(importId) {
-    const response = await authFetch(`/workflow-analysis/import/${encodeURIComponent(importId)}/story`);
-    const data = await safeJson(response);
+function renderImports(imports) {
+    document.getElementById("importsSection")?.classList.remove("hidden");
 
-    if (!response.ok) {
-        throw new Error(data?.message || "Erreur story.");
+    const container = document.getElementById("importsResult");
+    if (!container) return;
+
+    if (!imports.length) {
+        container.innerHTML = `<div class="empty-state">Aucun import trouvé.</div>`;
+        return;
     }
 
-    return data;
+    container.innerHTML = `
+        <div class="imports-table-wrap">
+            <table class="imports-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Fichier</th>
+                        <th>Début</th>
+                        <th>Statut</th>
+                        <th>Total lignes</th>
+                        <th>Erreurs</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${imports.map(renderImportRow).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderImportRow(imp) {
+    const id = imp?.id ?? "";
+    const fileName = imp?.fileName ?? "";
+    const startedAt = imp?.startedAt ?? "";
+    const status = imp?.status ?? "";
+    const totalLines = imp?.totalLines ?? 0;
+    const totalErrors = imp?.totalErrors ?? 0;
+
+    return `
+        <tr>
+            <td>${escapeHtml(id)}</td>
+            <td>${escapeHtml(fileName)}</td>
+            <td>${escapeHtml(startedAt)}</td>
+            <td>${escapeHtml(status)}</td>
+            <td>${escapeHtml(totalLines)}</td>
+            <td>${escapeHtml(totalErrors)}</td>
+            <td class="imports-actions">
+                <button type="button" class="secondary-btn" onclick="useImportId('${escapeJs(id)}')">Utiliser</button>
+                <button type="button" class="danger-btn" onclick="deleteImport('${escapeJs(id)}','${escapeJs(fileName)}')">Supprimer</button>
+            </td>
+        </tr>
+    `;
+}
+
+function useImportId(importId) {
+    const input = document.getElementById("importIdInput");
+    const logInput = document.getElementById("logFilterImportIds");
+    if (input) input.value = String(importId || "");
+    if (logInput) logInput.value = String(importId || "");
+    showMessage(`ImportId ${importId} appliqué aux champs.`, "success");
+}
+
+async function deleteImport(importId, fileName) {
+    if (!importId || !/^\d+$/.test(String(importId))) {
+        showMessage("ImportId invalide.", "error");
+        return;
+    }
+
+    const ok = confirm(`Voulez-vous vraiment supprimer l'import #${importId} (${fileName || "sans nom"}) et tous ses logs ?`);
+    if (!ok) {
+        showMessage("Suppression annulée.", "info");
+        return;
+    }
+
+    showMessage(`Suppression de l'import #${importId}...`, "info");
+    const response = await authFetch(`/imports/${encodeURIComponent(importId)}`, { method: "DELETE" });
+
+    if (!response.ok) {
+        const data = await safeJson(response);
+        throw new Error(data?.message || `Erreur suppression import (${response.status}).`);
+    }
+
+    await refreshImports();
+    showMessage(`Import #${importId} supprimé.`, "success");
 }
 
 async function fetchFilteredLogs(filters) {
     const params = new URLSearchParams();
 
-    if (filters.importId) params.set("importId", filters.importId);
-    if (filters.fileName) params.set("fileName", filters.fileName);
+    if (filters.importIds && filters.importIds.length) params.set("importIds", filters.importIds.join(","));
+    if (filters.fileNames && filters.fileNames.length) params.set("fileNames", filters.fileNames.join(","));
     if (filters.errorOnly) params.set("error", "true");
     if (filters.eventType) params.set("eventType", filters.eventType);
     if (filters.processName) params.set("processName", filters.processName);
@@ -582,8 +592,8 @@ async function fetchFilteredLogs(filters) {
 }
 
 function getLogFilters(forceErrorOnly) {
-    const importId = document.getElementById("logFilterImportId")?.value?.trim() || "";
-    const fileName = document.getElementById("logFilterFileName")?.value?.trim() || "";
+    const importIdsRaw = document.getElementById("logFilterImportIds")?.value || "";
+    const fileNamesRaw = document.getElementById("logFilterFileNames")?.value || "";
     const eventType = document.getElementById("logFilterEventType")?.value?.trim() || "";
     const processName = document.getElementById("logFilterProcessName")?.value?.trim() || "";
     const sessionId = document.getElementById("logFilterSessionId")?.value?.trim() || "";
@@ -591,15 +601,18 @@ function getLogFilters(forceErrorOnly) {
     const limit = document.getElementById("logFilterLimit")?.value?.trim() || "100";
     const errorOnly = forceErrorOnly || Boolean(document.getElementById("logFilterErrorOnly")?.checked);
 
-    if (importId && !/^\d+$/.test(importId)) {
-        throw new Error("Le filtre Import ID doit être numérique.");
+    const importIds = parseCsvLongs(importIdsRaw);
+    const fileNames = parseCsvStrings(fileNamesRaw);
+
+    if (!importIds.ok) {
+        throw new Error("Le filtre Import IDs doit contenir uniquement des nombres, séparés par des virgules.");
     }
 
     if (limit && !/^\d+$/.test(limit)) {
         throw new Error("La limite doit être numérique.");
     }
 
-    return { importId, fileName, eventType, processName, sessionId, uuid, limit, errorOnly };
+    return { importIds: importIds.values, fileNames, eventType, processName, sessionId, uuid, limit, errorOnly };
 }
 
 function renderRawResult(result) {
@@ -801,7 +814,7 @@ function renderLogsResult(logs, filters) {
 
     if (logsSummary) {
         logsSummary.textContent =
-            `${logs.length} log(s) | importId=${filters.importId || "tous"} | fileName=${filters.fileName || "tous"} | eventType=${filters.eventType || "tous"} | processName=${filters.processName || "tous"} | sessionId=${filters.sessionId || "tous"} | uuid=${filters.uuid || "tous"} | errorOnly=${filters.errorOnly ? "oui" : "non"}`;
+            `${logs.length} log(s) | importIds=${filters.importIds?.length ? filters.importIds.join(",") : "tous"} | fileNames=${filters.fileNames?.length ? filters.fileNames.join(",") : "tous"} | eventType=${filters.eventType || "tous"} | processName=${filters.processName || "tous"} | sessionId=${filters.sessionId || "tous"} | uuid=${filters.uuid || "tous"} | errorOnly=${filters.errorOnly ? "oui" : "non"}`;
     }
 
     if (!logsResult) return;
@@ -885,7 +898,7 @@ async function loadLogsFromWorkflow(workflowKey, uuid, processName) {
         const importId = document.getElementById("importIdInput")?.value?.trim() || "";
         const uuidInput = document.getElementById("logFilterUuid");
         const processInput = document.getElementById("logFilterProcessName");
-        const importInput = document.getElementById("logFilterImportId");
+        const importInput = document.getElementById("logFilterImportIds");
         const sessionInput = document.getElementById("logFilterSessionId");
 
         if (importInput && importId) importInput.value = importId;
@@ -937,6 +950,7 @@ function showLoggedInUI() {
     document.getElementById("userSection")?.classList.remove("hidden");
     document.getElementById("uploadSection")?.classList.remove("hidden");
     document.getElementById("uploadResultSection")?.classList.remove("hidden");
+    document.getElementById("importsSection")?.classList.remove("hidden");
     document.getElementById("analysisSection")?.classList.remove("hidden");
     document.getElementById("logExplorerSection")?.classList.remove("hidden");
 }
@@ -946,6 +960,7 @@ function showLoggedOutUI() {
     document.getElementById("userSection")?.classList.add("hidden");
     document.getElementById("uploadSection")?.classList.add("hidden");
     document.getElementById("uploadResultSection")?.classList.add("hidden");
+    document.getElementById("importsSection")?.classList.add("hidden");
     document.getElementById("analysisSection")?.classList.add("hidden");
     document.getElementById("logExplorerSection")?.classList.add("hidden");
     document.getElementById("humanResultSection")?.classList.add("hidden");
@@ -960,13 +975,14 @@ function resetProtectedSections() {
         "uploadResult",
         "analysisResult",
         "importIdInput",
-        "logFilterImportId",
-        "logFilterFileName",
+        "logFilterImportIds",
+        "logFilterFileNames",
         "logFilterEventType",
         "logFilterProcessName",
         "logFilterSessionId",
         "logFilterUuid",
-        "logFilterLimit"
+        "logFilterLimit",
+        "importsResult"
     ];
 
     ids.forEach(id => {
@@ -1032,5 +1048,41 @@ function escapeHtml(value) {
         .replaceAll("'", "&#039;");
 }
 
+function parseCsvLongs(raw) {
+    const text = String(raw ?? "").trim();
+    if (!text) return { ok: true, values: [] };
+    const parts = text.split(",").map(x => x.trim()).filter(Boolean);
+    const values = [];
+    for (const p of parts) {
+        if (!/^\d+$/.test(p)) return { ok: false, values: [] };
+        values.push(Number(p));
+    }
+    return { ok: true, values: Array.from(new Set(values)) };
+}
+
+function parseCsvStrings(raw) {
+    const text = String(raw ?? "").trim();
+    if (!text) return [];
+    const parts = text.split(",").map(x => x.trim()).filter(Boolean);
+    const unique = [];
+    const seen = new Set();
+    for (const p of parts) {
+        const key = p.toLowerCase();
+        if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(p);
+        }
+    }
+    return unique;
+}
+
+function extractFirstIdFromCsv(raw) {
+    const parsed = parseCsvLongs(raw);
+    if (!parsed.ok) return "";
+    return parsed.values.length ? String(parsed.values[0]) : "";
+}
+
 window.toggleWorkflowLines = toggleWorkflowLines;
 window.loadLogsFromWorkflow = loadLogsFromWorkflow;
+window.deleteImport = deleteImport;
+window.useImportId = useImportId;

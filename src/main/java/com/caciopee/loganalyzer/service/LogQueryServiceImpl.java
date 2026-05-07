@@ -59,6 +59,40 @@ public class LogQueryServiceImpl implements LogQueryService {
                 .toList();
     }
 
+    @Override
+    public List<LogEntryViewDto> searchLogsMulti(List<Long> importIds,
+                                                 List<String> fileNames,
+                                                 Boolean errorOnly,
+                                                 String eventType,
+                                                 String processName,
+                                                 String sessionId,
+                                                 String uuid,
+                                                 Integer limit) {
+
+        int safeLimit = (limit == null || limit <= 0) ? 100 : Math.min(limit, 1000);
+
+        Specification<LogEntry> spec = Specification
+                .where(LogEntrySpecifications.hasImportIds(importIds))
+                .and(LogEntrySpecifications.hasFileNames(fileNames))
+                .and(LogEntrySpecifications.hasError(errorOnly))
+                .and(LogEntrySpecifications.hasEventType(eventType))
+                .and(LogEntrySpecifications.hasProcessName(processName))
+                .and(LogEntrySpecifications.hasSessionId(sessionId))
+                .and(LogEntrySpecifications.hasUuid(uuid));
+
+        return logEntryRepository.findAll(
+                        spec,
+                        PageRequest.of(
+                                0,
+                                safeLimit,
+                                Sort.by(Sort.Direction.ASC, "logTimestamp").and(Sort.by(Sort.Direction.ASC, "id"))
+                        )
+                )
+                .stream()
+                .map(this::toDto)
+                .toList();
+    }
+
     private LogEntryViewDto toDto(LogEntry log) {
         LogEntryViewDto dto = new LogEntryViewDto();
 

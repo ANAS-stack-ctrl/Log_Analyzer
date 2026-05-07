@@ -4,6 +4,8 @@ import com.caciopee.loganalyzer.entity.LogEntry;
 import jakarta.persistence.criteria.JoinType;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.util.Collection;
+
 public final class LogEntrySpecifications {
 
     private LogEntrySpecifications() {
@@ -14,6 +16,13 @@ public final class LogEntrySpecifications {
                 importId == null ? null : cb.equal(root.get("logImport").get("id"), importId);
     }
 
+    public static Specification<LogEntry> hasImportIds(Collection<Long> importIds) {
+        return (root, query, cb) -> {
+            if (importIds == null || importIds.isEmpty()) return null;
+            return root.get("logImport").get("id").in(importIds);
+        };
+    }
+
     public static Specification<LogEntry> hasFileName(String fileName) {
         return (root, query, cb) -> {
             if (fileName == null || fileName.isBlank()) return null;
@@ -21,6 +30,14 @@ public final class LogEntrySpecifications {
                     cb.lower(root.join("logImport", JoinType.LEFT).get("fileName")),
                     "%" + fileName.toLowerCase() + "%"
             );
+        };
+    }
+
+    public static Specification<LogEntry> hasFileNames(Collection<String> fileNames) {
+        return (root, query, cb) -> {
+            if (fileNames == null || fileNames.isEmpty()) return null;
+            return cb.lower(root.join("logImport", JoinType.LEFT).get("fileName"))
+                    .in(fileNames.stream().map(s -> s == null ? "" : s.toLowerCase()).toList());
         };
     }
 

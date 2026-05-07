@@ -14,4 +14,13 @@ public interface LogQueryService {
                                      String sessionId,
                                      String uuid,
                                      Integer limit);
+
+    List<LogEntryViewDto> searchLogsMulti(List<Long> importIds,
+                                          List<String> fileNames,
+                                          Boolean errorOnly,
+                                          String eventType,
+                                          String processName,
+                                          String sessionId,
+                                          String uuid,
+                                          Integer limit);
 }
