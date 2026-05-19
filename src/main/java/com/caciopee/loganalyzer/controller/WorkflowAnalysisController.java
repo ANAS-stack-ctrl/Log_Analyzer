@@ -50,7 +50,10 @@ public class WorkflowAnalysisController {
         return userFriendlyAnalysisService.explainImportForHuman(importId);
     }
     @GetMapping("/import/{importId}/v2")
-    public WorkflowV2ResponseDto analyzeImportV2(@PathVariable Long importId) {
-        return workflowAnalyzerV2Service.analyzeImportV2(importId);
+    public WorkflowV2ResponseDto analyzeImportV2(
+            @PathVariable Long importId,
+            @RequestParam(required = false) String groupBy
+    ) {
+        return workflowAnalyzerV2Service.analyzeImportV2(importId, groupBy);
     }
-}
+    }

@@ -92,18 +92,58 @@
 
         <div class="log-filter-grid">
             <div class="field">
-                <label for="logFilterImportIds">Import IDs </label>
+                <label for="logFilterImportIds">Import IDs</label>
                 <input id="logFilterImportIds" type="text" placeholder="Ex: 1,2,3" />
             </div>
 
             <div class="field">
-                <label for="logFilterFileNames">Noms de fichiers </label>
+                <label for="logFilterFileNames">Noms de fichiers</label>
                 <input id="logFilterFileNames" type="text" placeholder="Ex: Works_1.log, Works_2.log" />
             </div>
 
             <div class="field">
                 <label for="logFilterProcessName">Process Name</label>
                 <input id="logFilterProcessName" type="text" placeholder="Ex: processWebService..." />
+            </div>
+
+            <div class="field">
+                <label for="logFilterUserName">Utilisateur</label>
+                <input id="logFilterUserName" type="text" placeholder="Ex: anas" />
+            </div>
+
+            <div class="field">
+                <label for="logFilterDateFrom">Date début</label>
+                <input id="logFilterDateFrom" type="datetime-local" />
+            </div>
+
+            <div class="field">
+                <label for="logFilterDateTo">Date fin</label>
+                <input id="logFilterDateTo" type="datetime-local" />
+            </div>
+
+            <div class="field">
+                <label for="contextBeforeCount">Logs avant</label>
+                <input id="contextBeforeCount" type="number" value="20" min="0" max="100" />
+            </div>
+
+            <div class="field">
+                <label for="contextAfterCount">Logs après</label>
+                <input id="contextAfterCount" type="number" value="20" min="0" max="100" />
+            </div>
+
+            <div class="field">
+                <label for="logGroupBy">Regrouper par</label>
+                <select id="logGroupBy">
+                    <option value="sessionId">Session ID</option>
+                    <option value="userName">Utilisateur</option>
+                    <option value="processName">Process Name</option>
+                    <option value="eventType">Event Type</option>
+                    <option value="level">Level</option>
+                    <option value="sourceFileName">Fichier source</option>
+                    <option value="uuid">UUID</option>
+                    <option value="businessKey">Business Key</option>
+                    <option value="correlationId">Correlation ID</option>
+                </select>
             </div>
 
             <div class="field">
@@ -118,7 +158,7 @@
 
             <div class="field">
                 <label for="logFilterLimit">Limite</label>
-                <input id="logFilterLimit" type="text" value="100" />
+                <input id="logFilterLimit" type="text" value="0" placeholder="0 pour tous" />
             </div>
 
             <div class="field checkbox-field">
@@ -130,6 +170,7 @@
         <div class="actions wrap">
             <button id="loadLogsBtn" type="button">Charger les logs</button>
             <button id="loadErrorLogsBtn" type="button" class="secondary-btn">Seulement les erreurs</button>
+            <button id="groupLogsBtn" type="button" class="secondary-btn">Regrouper les logs</button>
             <button id="loadGenericExplanationsBtn" type="button" class="secondary-btn">Logs génériques par import</button>
             <button id="loadAllGenericExplanationsBtn" type="button" class="secondary-btn">Voir tous les logs génériques</button>
             <button id="clearLogsBtn" type="button" class="danger-btn">Vider les logs</button>
@@ -146,7 +187,46 @@
             <h2>Logs consultables</h2>
             <div id="logsSummary" class="logs-summary"></div>
         </div>
+
+        <div class="log-view-toolbar">
+            <button id="viewDetailedBtn" type="button" class="active">Vue détaillée</button>
+            <button id="viewMessagesBtn" type="button">Messages seulement</button>
+            <button id="viewRawBtn" type="button">Lignes brutes</button>
+        </div>
+
         <div id="logsResult"></div>
+    </section>
+
+    <section class="card hidden" id="groupsResultSection">
+        <div class="card-header-inline">
+            <h2>Groupes de logs</h2>
+            <div id="groupsSummary" class="logs-summary"></div>
+        </div>
+        <div id="groupsResult"></div>
+    </section>
+
+    <section class="card hidden" id="groupAnalysisSection">
+        <div class="card-header-inline">
+            <h2>Analyse du groupe</h2>
+            <button id="clearGroupAnalysisBtn" type="button" class="danger-btn">Vider l’analyse</button>
+        </div>
+        <div id="groupAnalysisResult"></div>
+    </section>
+
+    <section class="card hidden" id="workflowGraphSection">
+        <div class="card-header-inline">
+            <h2>Graphe relationnel du groupe</h2>
+            <button id="clearWorkflowGraphBtn" type="button" class="danger-btn">Vider le graphe</button>
+        </div>
+        <div id="workflowGraphResult"></div>
+    </section>
+
+    <section class="card hidden" id="relatedLogsSection">
+        <div class="card-header-inline">
+            <h2>Logs liés avec explication</h2>
+            <button id="clearRelatedLogsBtn" type="button" class="danger-btn">Vider les logs liés</button>
+        </div>
+        <div id="relatedLogsResult"></div>
     </section>
 
     <section class="card hidden" id="humanResultSection">
@@ -163,7 +243,6 @@
         <h2>Messages</h2>
         <div id="messageBox" class="info"></div>
     </section>
-
 </div>
 
 <script src="/auth.js"></script>

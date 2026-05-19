@@ -9,6 +9,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,7 +18,7 @@ import java.util.regex.Pattern;
 public class LogQueryServiceImpl implements LogQueryService {
 
     private static final Pattern UUID_PATTERN =
-            Pattern.compile("\\buuid\\s*\\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("\\buuid\\s*\\[([^]]+)]", Pattern.CASE_INSENSITIVE);
 
     private final LogEntryRepository logEntryRepository;
 
@@ -31,32 +32,28 @@ public class LogQueryServiceImpl implements LogQueryService {
                                             Boolean errorOnly,
                                             String eventType,
                                             String processName,
+                                            String userName,
                                             String sessionId,
                                             String uuid,
+                                            LocalDateTime dateFrom,
+                                            LocalDateTime dateTo,
                                             Integer limit) {
 
-        int safeLimit = (limit == null || limit <= 0) ? 100 : Math.min(limit, 1000);
+        int safeLimit = normalizeLimit(limit);
 
-        Specification<LogEntry> spec = Specification
-                .where(LogEntrySpecifications.hasImportId(importId))
-                .and(LogEntrySpecifications.hasFileName(fileName))
-                .and(LogEntrySpecifications.hasError(errorOnly))
-                .and(LogEntrySpecifications.hasEventType(eventType))
-                .and(LogEntrySpecifications.hasProcessName(processName))
-                .and(LogEntrySpecifications.hasSessionId(sessionId))
-                .and(LogEntrySpecifications.hasUuid(uuid));
+        Specification<LogEntry> spec = Specification.allOf(
+                LogEntrySpecifications.hasImportId(importId),
+                LogEntrySpecifications.hasFileName(fileName),
+                LogEntrySpecifications.hasError(errorOnly),
+                LogEntrySpecifications.hasEventType(eventType),
+                LogEntrySpecifications.hasProcessName(processName),
+                LogEntrySpecifications.hasUserName(userName),
+                LogEntrySpecifications.hasSessionId(sessionId),
+                LogEntrySpecifications.hasUuid(uuid),
+                LogEntrySpecifications.hasTimestampBetween(dateFrom, dateTo)
+        );
 
-        return logEntryRepository.findAll(
-                        spec,
-                        PageRequest.of(
-                                0,
-                                safeLimit,
-                                Sort.by(Sort.Direction.ASC, "logTimestamp").and(Sort.by(Sort.Direction.ASC, "id"))
-                        )
-                )
-                .stream()
-                .map(this::toDto)
-                .toList();
+        return executeSearch(spec, safeLimit);
     }
 
     @Override
@@ -65,32 +62,60 @@ public class LogQueryServiceImpl implements LogQueryService {
                                                  Boolean errorOnly,
                                                  String eventType,
                                                  String processName,
+                                                 String userName,
                                                  String sessionId,
                                                  String uuid,
+                                                 LocalDateTime dateFrom,
+                                                 LocalDateTime dateTo,
                                                  Integer limit) {
 
-        int safeLimit = (limit == null || limit <= 0) ? 100 : Math.min(limit, 1000);
+        int safeLimit = normalizeLimit(limit);
 
-        Specification<LogEntry> spec = Specification
-                .where(LogEntrySpecifications.hasImportIds(importIds))
-                .and(LogEntrySpecifications.hasFileNames(fileNames))
-                .and(LogEntrySpecifications.hasError(errorOnly))
-                .and(LogEntrySpecifications.hasEventType(eventType))
-                .and(LogEntrySpecifications.hasProcessName(processName))
-                .and(LogEntrySpecifications.hasSessionId(sessionId))
-                .and(LogEntrySpecifications.hasUuid(uuid));
+        Specification<LogEntry> spec = Specification.allOf(
+                LogEntrySpecifications.hasImportIds(importIds),
+                LogEntrySpecifications.hasFileNames(fileNames),
+                LogEntrySpecifications.hasError(errorOnly),
+                LogEntrySpecifications.hasEventType(eventType),
+                LogEntrySpecifications.hasProcessName(processName),
+                LogEntrySpecifications.hasUserName(userName),
+                LogEntrySpecifications.hasSessionId(sessionId),
+                LogEntrySpecifications.hasUuid(uuid),
+                LogEntrySpecifications.hasTimestampBetween(dateFrom, dateTo)
+        );
+
+        return executeSearch(spec, safeLimit);
+    }
+
+    private List<LogEntryViewDto> executeSearch(Specification<LogEntry> spec, int limit) {
+        Sort sort = Sort.by(Sort.Direction.ASC, "logTimestamp")
+                .and(Sort.by(Sort.Direction.ASC, "id"));
+
+        if (limit == 0) {
+            return logEntryRepository.findAll(spec, sort)
+                    .stream()
+                    .map(this::toDto)
+                    .toList();
+        }
 
         return logEntryRepository.findAll(
                         spec,
-                        PageRequest.of(
-                                0,
-                                safeLimit,
-                                Sort.by(Sort.Direction.ASC, "logTimestamp").and(Sort.by(Sort.Direction.ASC, "id"))
-                        )
+                        PageRequest.of(0, limit, sort)
                 )
                 .stream()
                 .map(this::toDto)
                 .toList();
+    }
+
+    private int normalizeLimit(Integer limit) {
+        if (limit == null) return 100;
+
+        if (limit == 0) {
+            return 0;
+        }
+
+        if (limit < 0) return 100;
+
+        return Math.min(limit, 10000);
     }
 
     private LogEntryViewDto toDto(LogEntry log) {
@@ -101,6 +126,7 @@ public class LogQueryServiceImpl implements LogQueryService {
 
         dto.setLogTimestamp(log.getLogTimestamp());
         dto.setLevel(log.getLevel());
+        dto.setUserName(log.getUserName());
         dto.setProcessName(log.getProcessName());
         dto.setSourceClass(log.getSourceClass());
         dto.setMessage(log.getMessage());
@@ -110,12 +136,23 @@ public class LogQueryServiceImpl implements LogQueryService {
 
         dto.setSessionId(log.getSessionId());
         dto.setCorrelationId(log.getUserCorrelationId());
-        dto.setFileName(log.getLogImport() != null ? log.getLogImport().getFileName() : null);
-        dto.setUuid(extractUuid(log));
 
+        dto.setFileName(resolveDisplayedFileName(log));
+        dto.setSourceFileName(log.getSourceFileName());
+        dto.setSourceRelativePath(log.getSourceRelativePath());
+
+        dto.setUuid(extractUuid(log));
         dto.setIsError(Boolean.TRUE.equals(log.getIsError()));
 
         return dto;
+    }
+
+    private String resolveDisplayedFileName(LogEntry log) {
+        if (log.getSourceFileName() != null && !log.getSourceFileName().isBlank()) {
+            return log.getSourceFileName();
+        }
+
+        return log.getLogImport() != null ? log.getLogImport().getFileName() : null;
     }
 
     private String extractUuid(LogEntry log) {

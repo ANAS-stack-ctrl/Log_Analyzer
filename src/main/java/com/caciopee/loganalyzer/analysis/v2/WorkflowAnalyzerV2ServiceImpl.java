@@ -34,13 +34,18 @@ public class WorkflowAnalyzerV2ServiceImpl implements WorkflowAnalyzerV2Service 
 
     @Override
     public WorkflowV2ResponseDto analyzeImportV2(Long importId) {
+        return analyzeImportV2(importId, null);
+    }
+
+    @Override
+    public WorkflowV2ResponseDto analyzeImportV2(Long importId, String groupBy) {
         List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
 
         List<WorkflowEventV2> events = logs.stream()
                 .map(workflowEventDetectorService::toWorkflowEvent)
                 .toList();
 
-        List<WorkflowGroupV2> groups = workflowCorrelationService.groupEvents(events);
+        List<WorkflowGroupV2> groups = workflowCorrelationService.groupEvents(events,groupBy);
 
         List<WorkflowV2SummaryDto> summaries = groups.stream()
                 .map(this::analyzeGroup)

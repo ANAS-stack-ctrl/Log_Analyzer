@@ -11,10 +11,18 @@ import java.util.*;
 public class WorkflowCorrelationService {
 
     public List<WorkflowGroupV2> groupEvents(List<WorkflowEventV2> events) {
+        return groupEvents(events, null);
+    }
+
+    public List<WorkflowGroupV2> groupEvents(List<WorkflowEventV2> events, String groupBy) {
         Map<String, WorkflowGroupV2> groups = new LinkedHashMap<>();
 
+        String normalizedGroupBy = normalizeGroupBy(groupBy);
+
         for (WorkflowEventV2 event : events) {
-            String key = buildGroupKey(event);
+            String key = normalizedGroupBy == null
+                    ? buildDefaultGroupKey(event)
+                    : buildDynamicGroupKey(event, normalizedGroupBy);
 
             WorkflowGroupV2 group = groups.computeIfAbsent(key, k -> {
                 WorkflowGroupV2 g = new WorkflowGroupV2();
@@ -49,7 +57,22 @@ public class WorkflowCorrelationService {
         return result;
     }
 
-    private String buildGroupKey(WorkflowEventV2 event) {
+    private String normalizeGroupBy(String groupBy) {
+        if (groupBy == null || groupBy.isBlank()) {
+            return null;
+        }
+
+        String value = groupBy.trim();
+
+        return switch (value) {
+            case "sessionId", "userName", "processName", "eventType", "level",
+                 "sourceClass", "uuid", "businessKey", "correlationId",
+                 "transactionId", "filterCode", "className" -> value;
+            default -> null;
+        };
+    }
+
+    private String buildDefaultGroupKey(WorkflowEventV2 event) {
         if (notBlank(event.getSessionId())) {
             return "SESSION::" + event.getSessionId();
         }
@@ -75,7 +98,31 @@ public class WorkflowCorrelationService {
         String clazz = defaultValue(event.getClassName(), "UNKNOWN_CLASS");
         String thread = defaultValue(event.getThreadName(), "UNKNOWN_THREAD");
 
-        return process + "::" + filter + "::" + clazz + "::" + thread;
+        return "FALLBACK::" + process + "::" + filter + "::" + clazz + "::" + thread;
+    }
+
+    private String buildDynamicGroupKey(WorkflowEventV2 event, String groupBy) {
+        String value = switch (groupBy) {
+            case "sessionId" -> event.getSessionId();
+            case "userName" -> event.getUserName();
+            case "processName" -> event.getProcessName();
+            case "eventType" -> event.getWorkflowEventType() != null ? event.getWorkflowEventType().name() : event.getEventTypeFromParser();
+            case "level" -> event.getLevel();
+            case "sourceClass" -> event.getSourceClass();
+            case "uuid" -> event.getUuid();
+            case "businessKey" -> event.getBusinessKey();
+            case "correlationId" -> event.getCorrelationId();
+            case "transactionId" -> event.getTransactionId();
+            case "filterCode" -> event.getFilterCode();
+            case "className" -> event.getClassName();
+            default -> null;
+        };
+
+        if (!notBlank(value)) {
+            value = "NON_RENSEIGNE";
+        }
+
+        return groupBy.toUpperCase(Locale.ROOT) + "::" + value;
     }
 
     private void fillIfMissing(WorkflowGroupV2 group, WorkflowEventV2 event) {

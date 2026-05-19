@@ -72,7 +72,8 @@ body {
 
 input[type="text"],
 input[type="password"],
-input[type="file"] {
+input[type="file"],
+input[type="number"] {
     padding: 10px 12px;
     border: 1px solid #d5dbe3;
     border-radius: 8px;
@@ -83,7 +84,8 @@ input[type="file"] {
 
 input[type="text"]:focus,
 input[type="password"]:focus,
-input[type="file"]:focus {
+input[type="file"]:focus,
+input[type="number"]:focus {
     outline: none;
     border-color: #2343a3;
     box-shadow: 0 0 0 3px rgba(35, 67, 163, 0.12);
@@ -301,7 +303,6 @@ pre {
     line-height: 1.45;
 }
 
-/* Log explorer readability: keep messages visible on light background */
 .log-message {
     background: #ffffff;
     color: #1a1a1a;
@@ -396,6 +397,184 @@ pre {
     color: #b42318;
 }
 
+select,
+input[type="datetime-local"] {
+    padding: 10px 12px;
+    border: 1px solid #d5dbe3;
+    border-radius: 8px;
+    font-size: 14px;
+    background: #fff;
+    color: #1a1a1a;
+}
+
+select:focus,
+input[type="datetime-local"]:focus {
+    outline: none;
+    border-color: #2343a3;
+    box-shadow: 0 0 0 3px rgba(35, 67, 163, 0.12);
+}
+
+.groups-list {
+    display: grid;
+    gap: 18px;
+}
+
+.group-card {
+    border: 1px solid #d5dbe3;
+    border-radius: 12px;
+    padding: 16px;
+    background: #fbfbfd;
+}
+
+.group-card h3 {
+    margin: 0 0 10px;
+    font-size: 18px;
+}
+
+/* ========================================================= */
+/* NOUVELLES VUES LOGS : DÉTAILLÉ / MESSAGES / LIGNES BRUTES */
+/* ========================================================= */
+
+.log-view-toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.log-view-toolbar button {
+    border: none;
+    padding: 10px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    background: #e9edf7;
+    color: #2343a3;
+    font-weight: 700;
+}
+
+.log-view-toolbar button.active {
+    background: #2343a3;
+    color: #ffffff;
+}
+
+.messages-only-view,
+.raw-lines-view {
+    background: #ffffff;
+    border: 1px solid #d9dfea;
+    border-radius: 10px;
+    padding: 14px;
+    font-family: Consolas, "Courier New", monospace;
+    white-space: pre-wrap;
+    line-height: 1.7;
+    max-height: 750px;
+    overflow: auto;
+}
+
+.message-line,
+.raw-line {
+    padding: 4px 0;
+    border-bottom: 1px solid #f0f0f0;
+    word-break: break-word;
+}
+
+.message-line:last-child,
+.raw-line:last-child {
+    border-bottom: none;
+}
+
+.msg-time {
+    color: #2343a3;
+    font-weight: 700;
+    margin-right: 10px;
+}
+
+.msg-text {
+    color: #1a1a1a;
+}
+
+.raw-line {
+    color: #1a1a1a;
+}
+
+/* ========================================================= */
+/* ANALYSE INTELLIGENTE D’UN GROUPE */
+/* ========================================================= */
+
+.analysis-story {
+    display: grid;
+    gap: 18px;
+}
+
+.analysis-kpis {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.analysis-block {
+    border: 1px solid #d5dbe3;
+    border-radius: 12px;
+    padding: 16px;
+    background: #fbfbfd;
+}
+
+.analysis-block h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+.analysis-block p {
+    white-space: pre-wrap;
+    line-height: 1.7;
+    margin: 0;
+}
+
+.analysis-timeline {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 10px;
+    padding: 12px;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.analysis-timeline-line {
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f0f0;
+    line-height: 1.5;
+}
+
+.analysis-timeline-line:last-child {
+    border-bottom: none;
+}
+
+.analysis-items {
+    display: grid;
+    gap: 10px;
+}
+
+.analysis-item {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.analysis-item summary {
+    cursor: pointer;
+    line-height: 1.5;
+}
+
+.analysis-item-body {
+    margin-top: 10px;
+    display: grid;
+    gap: 10px;
+}
+
+.analysis-examples pre {
+    max-height: 180px;
+    margin: 8px 0 0;
+}
+
 @media (max-width: 768px) {
     .container {
         margin: 20px auto;
@@ -424,4 +603,337 @@ pre {
     .log-filter-grid {
         grid-template-columns: 1fr;
     }
+
+    .log-view-toolbar {
+        flex-direction: column;
+    }
+
+    .log-view-toolbar button {
+        width: 100%;
+    }
+
+    .analysis-kpis {
+        flex-direction: column;
+    }
+}
+
+/* ========================================================= */
+/* LOGS LIÉS AVEC EXPLICATION DÉTAILLÉE */
+/* ========================================================= */
+
+.analysis-item-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.related-logs-box {
+    display: grid;
+    gap: 18px;
+}
+
+.related-logs-list {
+    display: grid;
+    gap: 14px;
+}
+
+.related-log-card {
+    border: 1px solid #d5dbe3;
+    border-radius: 12px;
+    padding: 16px;
+    background: #fbfbfd;
+}
+
+/* ========================================================= */
+/* GRAPHE RELATIONNEL DU GROUPE */
+/* ========================================================= */
+
+.graph-layout {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 18px;
+    align-items: start;
+}
+
+.graph-sidebar,
+.graph-details {
+    border: 1px solid #d5dbe3;
+    border-radius: 12px;
+    padding: 16px;
+    background: #fbfbfd;
+}
+
+.graph-search-box {
+    margin-top: 14px;
+    display: grid;
+    gap: 6px;
+}
+
+.graph-search-box label {
+    font-weight: 700;
+}
+
+.graph-search-box input {
+    padding: 10px 12px;
+    border: 1px solid #d5dbe3;
+    border-radius: 10px;
+    font-size: 14px;
+}
+
+.graph-search-box input:focus {
+    outline: none;
+    border-color: #2343a3;
+    box-shadow: 0 0 0 3px rgba(35, 67, 163, 0.12);
+}
+
+.graph-node-group {
+    margin-top: 18px;
+}
+
+.graph-node-group h3 {
+    margin: 0 0 10px;
+}
+
+.graph-node-list {
+    display: grid;
+    gap: 8px;
+    max-height: 420px;
+    overflow: auto;
+}
+
+.graph-node-btn {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    text-align: left;
+    border: 1px solid #d5dbe3;
+    background: #fff;
+    color: #1a1a1a;
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    width: 100%;
+}
+
+.graph-node-btn:hover {
+    border-color: #2343a3;
+}
+
+.graph-node-btn small {
+    color: #667085;
+    white-space: nowrap;
+}
+
+.graph-detail-card {
+    display: grid;
+    gap: 14px;
+}
+
+.graph-detail-card h3 {
+    margin: 0;
+}
+
+.graph-detail-card p {
+    margin: 0;
+    line-height: 1.7;
+    white-space: pre-wrap;
+}
+
+.graph-relations {
+    display: grid;
+    gap: 8px;
+}
+
+.graph-relation-line {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #eee;
+    padding: 8px 0;
+}
+
+.graph-relation-line:last-child {
+    border-bottom: none;
+}
+
+.graph-relation-line button {
+    width: auto;
+}
+
+.graph-linked-nodes {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.graph-chip {
+    border: 1px solid #d5dbe3;
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: white;
+    color: #1a1a1a;
+    width: auto;
+}
+
+.graph-node-btn.error-pill,
+.graph-chip.error-pill,
+.error-pill {
+    background: #fee4e2 !important;
+    color: #b42318 !important;
+    border-color: #fecdca !important;
+}
+
+.graph-node-btn.info-pill,
+.graph-chip.info-pill,
+.info-pill {
+    background: #dbeafe !important;
+    color: #1d4ed8 !important;
+    border-color: #bfdbfe !important;
+}
+
+.graph-node-btn.warning-pill,
+.graph-chip.warning-pill,
+.warning-pill {
+    background: #fff7e6 !important;
+    color: #ad6800 !important;
+    border-color: #ffd591 !important;
+}
+
+@media (max-width: 1000px) {
+    .graph-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ========================================================= */
+/* OCCURRENCES TEMPORELLES + CONTEXTE AVANT/APRÈS */
+/* ========================================================= */
+
+.occurrence-list {
+    display: grid;
+    gap: 10px;
+    max-height: 520px;
+    overflow: auto;
+}
+
+.occurrence-line {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    border: 1px solid #e4e7ec;
+    border-radius: 10px;
+    padding: 12px;
+    background: #fff;
+}
+
+.occurrence-line strong {
+    color: #101828;
+}
+
+.occurrence-line small {
+    color: #667085;
+    line-height: 1.7;
+}
+
+.occurrence-line pre {
+    margin-top: 8px;
+    max-height: 120px;
+    overflow: auto;
+}
+
+.occurrence-actions {
+    display: flex;
+    align-items: start;
+}
+
+.occurrence-actions button {
+    white-space: nowrap;
+}
+
+.occurrence-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+@media (max-width: 768px) {
+    .occurrence-line {
+        grid-template-columns: 1fr;
+    }
+
+    .occurrence-actions {
+        align-items: stretch;
+    }
+
+    .occurrence-actions button {
+        width: 100%;
+    }
+}
+
+
+
+/* ========================================================= */
+/* CONTEXTE CHRONOLOGIQUE AVANT/APRÈS AVEC MOMENT SÉLECTIONNÉ */
+/* ========================================================= */
+
+.chronological-context-box {
+    background: #0f172a;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 14px;
+    max-height: 520px;
+    overflow: auto;
+    font-family: Consolas, monospace;
+    line-height: 1.6;
+}
+
+.chrono-line {
+    white-space: pre-wrap;
+    padding: 4px 8px;
+    border-radius: 6px;
+}
+
+.chrono-selected {
+    background: #fff3cd;
+    color: #111827;
+    border: 2px solid #f59e0b;
+    font-weight: 700;
+    margin: 8px 0;
+}
+.occurrence-line {
+    display: grid;
+    grid-template-columns: 1fr 150px;
+    gap: 14px;
+    align-items: start;
+}
+
+.context-inline-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.context-inline-controls button {
+    width: 100%;
+}
+
+.inline-before-after {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+}
+
+.inline-before-after label {
+    display: grid;
+    grid-template-columns: 45px 1fr;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.inline-before-after input {
+    width: 100%;
 }

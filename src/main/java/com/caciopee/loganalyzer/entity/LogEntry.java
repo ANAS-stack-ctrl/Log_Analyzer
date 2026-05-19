@@ -16,7 +16,10 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_log_entries_event_type", columnList = "event_type"),
                 @Index(name = "idx_log_entries_business_key", columnList = "business_key"),
                 @Index(name = "idx_log_entries_is_error", columnList = "is_error"),
-                @Index(name = "idx_log_entries_parse_quality", columnList = "parse_quality")
+                @Index(name = "idx_log_entries_parse_quality", columnList = "parse_quality"),
+                @Index(name = "idx_log_entries_source_file_name", columnList = "source_file_name"),
+                @Index(name = "idx_log_entries_user_name", columnList = "user_name"),
+                @Index(name = "idx_log_entries_process_name", columnList = "process_name")
         })
 public class LogEntry {
 
@@ -28,6 +31,13 @@ public class LogEntry {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "import_id", nullable = false)
     private LogImport logImport;
+
+
+    @Column(name = "source_file_name", length = 500)
+    private String sourceFileName;
+
+    @Column(name = "source_relative_path", length = 1000)
+    private String sourceRelativePath;
 
     @Column(name = "log_timestamp")
     private LocalDateTime logTimestamp;
@@ -449,6 +459,21 @@ public class LogEntry {
 
     public LogRawMessage getRawMessageEntity() {
         return rawMessageEntity;
+    }
+    public String getSourceFileName() {
+        return sourceFileName;
+    }
+
+    public void setSourceFileName(String sourceFileName) {
+        this.sourceFileName = sourceFileName;
+    }
+
+    public String getSourceRelativePath() {
+        return sourceRelativePath;
+    }
+
+    public void setSourceRelativePath(String sourceRelativePath) {
+        this.sourceRelativePath = sourceRelativePath;
     }
 
     public void setRawMessageEntity(LogRawMessage rawMessageEntity) {

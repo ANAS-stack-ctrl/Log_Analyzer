@@ -13,19 +13,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileReader;
+import java.io.*;
+import java.nio.file.*;
 import java.security.MessageDigest;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Timestamp;
+import java.sql.*;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Service
 @Transactional
@@ -39,6 +34,8 @@ public class LogFileIngestionService {
     private static final String INSERT_LOG_ENTRY_SQL = """
             INSERT INTO public.log_entries (
                 import_id,
+                source_file_name,
+                source_relative_path,
                 log_timestamp,
                 session_id,
                 level,
@@ -74,7 +71,7 @@ public class LogFileIngestionService {
                 incomplete_line,
                 created_at
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """;
 
@@ -100,7 +97,7 @@ public class LogFileIngestionService {
     }
 
     public List<UploadResult> ingestFiles(MultipartFile[] files) {
-        return java.util.Arrays.stream(files == null ? new MultipartFile[0] : files)
+        return Arrays.stream(files == null ? new MultipartFile[0] : files)
                 .filter(Objects::nonNull)
                 .map(this::ingestOne)
                 .toList();
@@ -112,15 +109,18 @@ public class LogFileIngestionService {
         }
 
         File tempFile = null;
+        Path unzipDir = null;
         LogImport logImport = null;
 
         try {
-            tempFile = File.createTempFile("upload-", "-" + safeName(file));
+            String uploadedName = safeName(file);
+
+            tempFile = File.createTempFile("upload-", "-" + uploadedName);
             file.transferTo(tempFile);
 
             String fileHash = computeSha256(tempFile);
 
-            var existingImportOpt = logImportRepository.findByFileHash(fileHash);
+            Optional<LogImport> existingImportOpt = logImportRepository.findByFileHash(fileHash);
             if (existingImportOpt.isPresent()) {
                 LogImport existingImport = existingImportOpt.get();
                 long persistedRows = countPersistedRows(existingImport.getId());
@@ -128,7 +128,7 @@ public class LogFileIngestionService {
                 if (persistedRows > 0) {
                     return new UploadResult(
                             existingImport.getId(),
-                            safeName(file),
+                            uploadedName,
                             false,
                             "Fichier déjà importé et réellement persisté. Import ID existant: "
                                     + existingImport.getId() + ", lignes persistées=" + persistedRows
@@ -140,13 +140,10 @@ public class LogFileIngestionService {
                 existingImport.setErrorMessage("Import précédent incomplet : aucune ligne persistée dans public.log_entries.");
                 existingImport.setSummary("Import invalide détecté automatiquement avant réimport.");
                 logImportRepository.save(existingImport);
-
-                log.warn("Ancien import incomplet détecté importId={} fileHash={} -> réimport autorisé",
-                        existingImport.getId(), fileHash);
             }
 
             logImport = new LogImport();
-            logImport.setFileName(safeName(file));
+            logImport.setFileName(uploadedName);
             logImport.setOriginalFileName(file.getOriginalFilename());
             logImport.setFileSize(file.getSize());
             logImport.setFileHash(fileHash);
@@ -155,85 +152,53 @@ public class LogFileIngestionService {
             logImport.setSummary("Import en cours...");
             logImport = logImportRepository.save(logImport);
 
-            int totalLines = 0;
-            int parsedOk = 0;
-            int failed = 0;
-            int totalErrors = 0;
-            int totalInfos = 0;
-            int totalWarnings = 0;
-            int insertedRows = 0;
+            List<FileToImport> filesToImport;
 
-            boolean sourceMetadataInitialized = false;
-            List<LogEntryRow> batch = new ArrayList<>(BATCH_SIZE);
+            if (isZipFile(uploadedName)) {
+                unzipDir = Files.createTempDirectory("loganalyzer-zip-");
+                filesToImport = unzipLogFiles(tempFile.toPath(), unzipDir);
 
-            log.info("Début import fichier={} importId={}", safeName(file), logImport.getId());
-
-            try (BufferedReader br = new BufferedReader(new FileReader(tempFile), READER_BUFFER_SIZE)) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    totalLines++;
-
-                    if (line.trim().isEmpty()) {
-                        continue;
-                    }
-
-                    try {
-                        ParsedLogEntry parsed = logParserService.parseLine(line);
-
-                        LogEntryRow row = mapToRow(parsed, logImport.getId());
-                        batch.add(row);
-                        parsedOk++;
-
-                        if ("ERROR".equalsIgnoreCase(parsed.getLevel())) {
-                            totalErrors++;
-                        } else if ("INFO".equalsIgnoreCase(parsed.getLevel())) {
-                            totalInfos++;
-                        } else if ("WARN".equalsIgnoreCase(parsed.getLevel())
-                                || "WARNING".equalsIgnoreCase(parsed.getLevel())) {
-                            totalWarnings++;
-                        }
-
-                        if (!sourceMetadataInitialized) {
-                            logImport.setSourceServer(parsed.getServerName());
-                            logImport.setSourceEnvironment(parsed.getEnvironment());
-                            logImport.setSourceAppVersion(parsed.getAppVersion());
-                            sourceMetadataInitialized = true;
-                        }
-
-                        if (batch.size() >= BATCH_SIZE) {
-                            insertedRows += insertBatch(batch);
-                            batch.clear();
-                        }
-
-                    } catch (Exception e) {
-                        failed++;
-                        log.warn("Ligne ignorée importId={} lineNumber={} reason={}",
-                                logImport.getId(), totalLines, e.getMessage());
-                    }
+                if (filesToImport.isEmpty()) {
+                    throw new IllegalArgumentException("Le fichier ZIP ne contient aucun fichier .log ou .txt exploitable.");
                 }
+
+                log.info("ZIP détecté importId={} zip={} fichiersLogs={}",
+                        logImport.getId(), uploadedName, filesToImport.size());
+            } else {
+                if (!isSupportedLogFile(uploadedName)) {
+                    throw new IllegalArgumentException("Format non supporté. Formats acceptés : .log, .txt, .zip");
+                }
+
+                filesToImport = List.of(new FileToImport(
+                        tempFile.toPath(),
+                        uploadedName,
+                        uploadedName
+                ));
             }
 
-            if (!batch.isEmpty()) {
-                insertedRows += insertBatch(batch);
-                batch.clear();
-            }
+            ImportCounters counters = processFiles(logImport, filesToImport);
 
             long persistedCount = countPersistedRows(logImport.getId());
 
             logImport.setFinishedAt(LocalDateTime.now());
-            logImport.setTotalLines(totalLines);
-            logImport.setParsedLines(parsedOk);
-            logImport.setFailedLines(failed);
-            logImport.setTotalErrors(totalErrors);
-            logImport.setTotalInfos(totalInfos);
-            logImport.setTotalWarnings(totalWarnings);
+            logImport.setTotalLines(counters.totalLines);
+            logImport.setParsedLines(counters.parsedOk);
+            logImport.setFailedLines(counters.failed);
+            logImport.setTotalErrors(counters.totalErrors);
+            logImport.setTotalInfos(counters.totalInfos);
+            logImport.setTotalWarnings(counters.totalWarnings);
 
-            String validationError = validateImportCounts(parsedOk, failed, insertedRows, persistedCount);
+            String validationError = validateImportCounts(
+                    counters.parsedOk,
+                    counters.failed,
+                    counters.insertedRows,
+                    persistedCount
+            );
 
             if (validationError == null) {
-                if (failed == 0) {
+                if (counters.failed == 0) {
                     logImport.setStatus(LogImportStatus.SUCCESS);
-                } else if (parsedOk > 0) {
+                } else if (counters.parsedOk > 0) {
                     logImport.setStatus(LogImportStatus.PARTIAL_SUCCESS);
                 } else {
                     logImport.setStatus(LogImportStatus.FAILED);
@@ -242,33 +207,34 @@ public class LogFileIngestionService {
             } else {
                 logImport.setStatus(LogImportStatus.FAILED);
                 logImport.setErrorMessage(validationError);
-                log.error("Import incohérent importId={} : {}", logImport.getId(), validationError);
             }
 
             logImport.setSummary(buildSummary(
-                    totalLines,
-                    parsedOk,
-                    failed,
-                    insertedRows,
+                    counters.totalFiles,
+                    counters.totalLines,
+                    counters.parsedOk,
+                    counters.failed,
+                    counters.insertedRows,
                     persistedCount,
-                    totalErrors,
-                    totalInfos,
-                    totalWarnings
+                    counters.totalErrors,
+                    counters.totalInfos,
+                    counters.totalWarnings
             ));
 
             logImportRepository.save(logImport);
 
             return new UploadResult(
                     logImport.getId(),
-                    safeName(file),
+                    uploadedName,
                     validationError == null,
                     validationError == null
-                            ? "Import terminé. Lignes lues=" + totalLines
-                              + ", parsées=" + parsedOk
-                              + ", insérées=" + insertedRows
+                            ? "Import terminé. Fichiers traités=" + counters.totalFiles
+                              + ", lignes lues=" + counters.totalLines
+                              + ", parsées=" + counters.parsedOk
+                              + ", insérées=" + counters.insertedRows
                               + ", persistées=" + persistedCount
-                              + ", erreurs parsing=" + failed
-                              + ", logs ERROR=" + totalErrors
+                              + ", erreurs parsing=" + counters.failed
+                              + ", logs ERROR=" + counters.totalErrors
                             : "Import échoué : " + validationError
             );
 
@@ -294,7 +260,131 @@ public class LogFileIngestionService {
             if (tempFile != null && tempFile.exists() && !tempFile.delete()) {
                 log.warn("Impossible de supprimer le fichier temporaire {}", tempFile.getAbsolutePath());
             }
+
+            if (unzipDir != null) {
+                deleteDirectoryQuietly(unzipDir);
+            }
         }
+    }
+
+    private ImportCounters processFiles(LogImport logImport, List<FileToImport> filesToImport) throws IOException {
+        ImportCounters counters = new ImportCounters();
+        counters.totalFiles = filesToImport.size();
+
+        boolean sourceMetadataInitialized = false;
+        List<LogEntryRow> batch = new ArrayList<>(BATCH_SIZE);
+
+        for (FileToImport fileToImport : filesToImport) {
+            log.info("Début traitement fichier interne importId={} file={}",
+                    logImport.getId(), fileToImport.relativePath());
+
+            try (BufferedReader br = new BufferedReader(new FileReader(fileToImport.path().toFile()), READER_BUFFER_SIZE)) {
+                String line;
+
+                while ((line = br.readLine()) != null) {
+                    counters.totalLines++;
+
+                    if (line.trim().isEmpty()) {
+                        continue;
+                    }
+
+                    try {
+                        ParsedLogEntry parsed = logParserService.parseLine(line);
+
+                        LogEntryRow row = mapToRow(
+                                parsed,
+                                logImport.getId(),
+                                fileToImport.fileName(),
+                                fileToImport.relativePath()
+                        );
+
+                        batch.add(row);
+                        counters.parsedOk++;
+
+                        if ("ERROR".equalsIgnoreCase(parsed.getLevel())) {
+                            counters.totalErrors++;
+                        } else if ("INFO".equalsIgnoreCase(parsed.getLevel())) {
+                            counters.totalInfos++;
+                        } else if ("WARN".equalsIgnoreCase(parsed.getLevel())
+                                || "WARNING".equalsIgnoreCase(parsed.getLevel())) {
+                            counters.totalWarnings++;
+                        }
+
+                        if (!sourceMetadataInitialized) {
+                            logImport.setSourceServer(parsed.getServerName());
+                            logImport.setSourceEnvironment(parsed.getEnvironment());
+                            logImport.setSourceAppVersion(parsed.getAppVersion());
+                            sourceMetadataInitialized = true;
+                        }
+
+                        if (batch.size() >= BATCH_SIZE) {
+                            counters.insertedRows += insertBatch(batch);
+                            batch.clear();
+                        }
+
+                    } catch (Exception e) {
+                        counters.failed++;
+                        log.warn("Ligne ignorée importId={} file={} lineNumber={} reason={}",
+                                logImport.getId(),
+                                fileToImport.relativePath(),
+                                counters.totalLines,
+                                e.getMessage());
+                    }
+                }
+            }
+        }
+
+        if (!batch.isEmpty()) {
+            counters.insertedRows += insertBatch(batch);
+            batch.clear();
+        }
+
+        return counters;
+    }
+
+    private List<FileToImport> unzipLogFiles(Path zipPath, Path destinationDir) throws IOException {
+        List<FileToImport> result = new ArrayList<>();
+
+        try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(Files.newInputStream(zipPath)))) {
+            ZipEntry entry;
+
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    zis.closeEntry();
+                    continue;
+                }
+
+                String entryName = normalizeZipEntryName(entry.getName());
+
+                if (!isSupportedLogFile(entryName)) {
+                    zis.closeEntry();
+                    continue;
+                }
+
+                Path target = destinationDir.resolve(entryName).normalize();
+
+                if (!target.startsWith(destinationDir.normalize())) {
+                    throw new IOException("Entrée ZIP dangereuse détectée : " + entry.getName());
+                }
+
+                Files.createDirectories(target.getParent());
+
+                try (OutputStream os = new BufferedOutputStream(Files.newOutputStream(target))) {
+                    zis.transferTo(os);
+                }
+
+                result.add(new FileToImport(
+                        target,
+                        target.getFileName().toString(),
+                        entryName
+                ));
+
+                zis.closeEntry();
+            }
+        }
+
+        result.sort(Comparator.comparing(FileToImport::relativePath));
+        return result;
     }
 
     private int insertBatch(List<LogEntryRow> batch) {
@@ -304,40 +394,42 @@ public class LogFileIngestionService {
                 LogEntryRow row = batch.get(i);
 
                 ps.setLong(1, row.importId());
-                setTimestamp(ps, 2, row.logTimestamp());
-                setString(ps, 3, row.sessionId());
-                setString(ps, 4, row.level());
-                setString(ps, 5, row.userName());
-                setString(ps, 6, row.sourceClass());
-                setString(ps, 7, row.processName());
-                setString(ps, 8, row.stepCode());
-                setInteger(ps, 9, row.logCode());
-                setString(ps, 10, row.environment());
-                setString(ps, 11, row.serverName());
-                setString(ps, 12, row.appVersion());
-                setString(ps, 13, row.userCorrelationId());
-                setString(ps, 14, row.message());
-                setString(ps, 15, row.rawLog());
-                setString(ps, 16, row.eventType());
-                setString(ps, 17, row.fieldName());
-                setString(ps, 18, row.interfaceField());
-                setString(ps, 19, row.fieldClassCode());
-                setString(ps, 20, row.parsedType());
-                setString(ps, 21, row.parsedValue());
-                setString(ps, 22, row.relationName());
-                setString(ps, 23, row.relationKey());
-                setString(ps, 24, row.businessKey());
-                setString(ps, 25, row.mandatoryField());
-                setString(ps, 26, row.errorColumn());
-                setString(ps, 27, row.errorAttribute());
-                setString(ps, 28, row.errorValue());
-                setString(ps, 29, row.errorBusinessKey());
-                ps.setBoolean(30, row.isError());
-                setString(ps, 31, row.businessMeaning());
-                setString(ps, 32, row.parseQuality());
-                ps.setBoolean(33, row.ambiguousMessage());
-                ps.setBoolean(34, row.incompleteLine());
-                setTimestamp(ps, 35, row.createdAt());
+                setString(ps, 2, row.sourceFileName());
+                setString(ps, 3, row.sourceRelativePath());
+                setTimestamp(ps, 4, row.logTimestamp());
+                setString(ps, 5, row.sessionId());
+                setString(ps, 6, row.level());
+                setString(ps, 7, row.userName());
+                setString(ps, 8, row.sourceClass());
+                setString(ps, 9, row.processName());
+                setString(ps, 10, row.stepCode());
+                setInteger(ps, 11, row.logCode());
+                setString(ps, 12, row.environment());
+                setString(ps, 13, row.serverName());
+                setString(ps, 14, row.appVersion());
+                setString(ps, 15, row.userCorrelationId());
+                setString(ps, 16, row.message());
+                setString(ps, 17, row.rawLog());
+                setString(ps, 18, row.eventType());
+                setString(ps, 19, row.fieldName());
+                setString(ps, 20, row.interfaceField());
+                setString(ps, 21, row.fieldClassCode());
+                setString(ps, 22, row.parsedType());
+                setString(ps, 23, row.parsedValue());
+                setString(ps, 24, row.relationName());
+                setString(ps, 25, row.relationKey());
+                setString(ps, 26, row.businessKey());
+                setString(ps, 27, row.mandatoryField());
+                setString(ps, 28, row.errorColumn());
+                setString(ps, 29, row.errorAttribute());
+                setString(ps, 30, row.errorValue());
+                setString(ps, 31, row.errorBusinessKey());
+                ps.setBoolean(32, row.isError());
+                setString(ps, 33, row.businessMeaning());
+                setString(ps, 34, row.parseQuality());
+                ps.setBoolean(35, row.ambiguousMessage());
+                ps.setBoolean(36, row.incompleteLine());
+                setTimestamp(ps, 37, row.createdAt());
             }
 
             @Override
@@ -354,7 +446,7 @@ public class LogFileIngestionService {
                 LIMIT ?
                 """, Long.class, batch.get(0).importId(), batch.size());
 
-        java.util.Collections.reverse(entryIds);
+        Collections.reverse(entryIds);
 
         int rawCount = Math.min(entryIds.size(), batch.size());
         for (int i = 0; i < rawCount; i++) {
@@ -376,6 +468,7 @@ public class LogFileIngestionService {
                 inserted++;
             }
         }
+
         return inserted;
     }
 
@@ -404,9 +497,14 @@ public class LogFileIngestionService {
         return null;
     }
 
-    private LogEntryRow mapToRow(ParsedLogEntry parsed, Long importId) {
+    private LogEntryRow mapToRow(ParsedLogEntry parsed,
+                                 Long importId,
+                                 String sourceFileName,
+                                 String sourceRelativePath) {
         return new LogEntryRow(
                 importId,
+                sourceFileName,
+                sourceRelativePath,
                 parsed.getLogTimestamp(),
                 parsed.getExecutionId(),
                 parsed.getLevel(),
@@ -447,7 +545,8 @@ public class LogFileIngestionService {
         );
     }
 
-    private String buildSummary(int totalLines,
+    private String buildSummary(int totalFiles,
+                                int totalLines,
                                 int parsedOk,
                                 int failed,
                                 int insertedRows,
@@ -456,7 +555,8 @@ public class LogFileIngestionService {
                                 int totalInfos,
                                 int totalWarnings) {
         return "Import terminé. "
-                + "Lignes lues=" + totalLines
+                + "Fichiers traités=" + totalFiles
+                + ", lignes lues=" + totalLines
                 + ", parsées=" + parsedOk
                 + ", erreurs parsing=" + failed
                 + ", insérées=" + insertedRows
@@ -464,6 +564,25 @@ public class LogFileIngestionService {
                 + ", logs ERROR=" + totalErrors
                 + ", logs INFO=" + totalInfos
                 + ", logs WARN=" + totalWarnings;
+    }
+
+    private boolean isZipFile(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".zip");
+    }
+
+    private boolean isSupportedLogFile(String fileName) {
+        if (fileName == null) return false;
+
+        String lower = fileName.toLowerCase(Locale.ROOT);
+
+        return lower.endsWith(".log")
+                || lower.endsWith(".txt")
+                || lower.endsWith(".out");
+    }
+
+    private String normalizeZipEntryName(String name) {
+        if (name == null) return "unknown.log";
+        return name.replace("\\", "/").replaceAll("^/+", "");
     }
 
     private String computeSha256(File file) {
@@ -481,15 +600,35 @@ public class LogFileIngestionService {
             for (byte b : hashBytes) {
                 sb.append(String.format("%02x", b));
             }
+
             return sb.toString();
         } catch (Exception e) {
             throw new IllegalStateException("Impossible de calculer le hash du fichier", e);
         }
     }
 
+    private void deleteDirectoryQuietly(Path dir) {
+        try {
+            if (dir == null || !Files.exists(dir)) return;
+
+            try (var walk = Files.walk(dir)) {
+                walk.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                log.warn("Impossible de supprimer {}", path, e);
+                            }
+                        });
+            }
+        } catch (IOException e) {
+            log.warn("Impossible de supprimer le dossier temporaire {}", dir, e);
+        }
+    }
+
     private void setString(PreparedStatement ps, int index, String value) throws SQLException {
         if (value == null) {
-            ps.setNull(index, java.sql.Types.VARCHAR);
+            ps.setNull(index, Types.VARCHAR);
         } else {
             ps.setString(index, value);
         }
@@ -497,7 +636,7 @@ public class LogFileIngestionService {
 
     private void setInteger(PreparedStatement ps, int index, Integer value) throws SQLException {
         if (value == null) {
-            ps.setNull(index, java.sql.Types.INTEGER);
+            ps.setNull(index, Types.INTEGER);
         } else {
             ps.setInt(index, value);
         }
@@ -505,7 +644,7 @@ public class LogFileIngestionService {
 
     private void setTimestamp(PreparedStatement ps, int index, LocalDateTime value) throws SQLException {
         if (value == null) {
-            ps.setNull(index, java.sql.Types.TIMESTAMP);
+            ps.setNull(index, Types.TIMESTAMP);
         } else {
             ps.setTimestamp(index, Timestamp.valueOf(value));
         }
@@ -513,13 +652,32 @@ public class LogFileIngestionService {
 
     private String safeName(MultipartFile file) {
         String name = file == null ? null : file.getOriginalFilename();
-        return (name == null || name.isBlank()) ? "unknown.log" : name;
+        return (name == null || name.isBlank()) ? "unknown.log" : Paths.get(name).getFileName().toString();
     }
 
     public record UploadResult(Long importId, String fileName, boolean success, String message) {}
 
+    private record FileToImport(
+            Path path,
+            String fileName,
+            String relativePath
+    ) {}
+
+    private static class ImportCounters {
+        int totalFiles = 0;
+        int totalLines = 0;
+        int parsedOk = 0;
+        int failed = 0;
+        int totalErrors = 0;
+        int totalInfos = 0;
+        int totalWarnings = 0;
+        int insertedRows = 0;
+    }
+
     private record LogEntryRow(
             Long importId,
+            String sourceFileName,
+            String sourceRelativePath,
             LocalDateTime logTimestamp,
             String sessionId,
             String level,
