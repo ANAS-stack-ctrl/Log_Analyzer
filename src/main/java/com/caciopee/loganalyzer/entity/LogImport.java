@@ -76,11 +76,26 @@ public class LogImport {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "processing_file_count")
+    private Integer processingFileCount;
+
+    @Column(name = "processing_file_index")
+    private Integer processingFileIndex;
+
+    @Column(name = "processing_current_file", length = 500)
+    private String processingCurrentFile;
+
+    @Column(name = "processing_percent")
+    private Integer processingPercent;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    @Column(name = "last_accessed_at")
+    private LocalDateTime lastAccessedAt;
 
     @OneToMany(mappedBy = "logImport", cascade = CascadeType.ALL, orphanRemoval = false)
     private List<LogEntry> logEntries = new ArrayList<>();
@@ -265,12 +280,52 @@ public class LogImport {
         this.errorMessage = errorMessage;
     }
 
+    public Integer getProcessingFileCount() {
+        return processingFileCount;
+    }
+
+    public void setProcessingFileCount(Integer processingFileCount) {
+        this.processingFileCount = processingFileCount;
+    }
+
+    public Integer getProcessingFileIndex() {
+        return processingFileIndex;
+    }
+
+    public void setProcessingFileIndex(Integer processingFileIndex) {
+        this.processingFileIndex = processingFileIndex;
+    }
+
+    public String getProcessingCurrentFile() {
+        return processingCurrentFile;
+    }
+
+    public void setProcessingCurrentFile(String processingCurrentFile) {
+        this.processingCurrentFile = processingCurrentFile;
+    }
+
+    public Integer getProcessingPercent() {
+        return processingPercent;
+    }
+
+    public void setProcessingPercent(Integer processingPercent) {
+        this.processingPercent = processingPercent;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public LocalDateTime getLastAccessedAt() {
+        return lastAccessedAt;
+    }
+
+    public void setLastAccessedAt(LocalDateTime lastAccessedAt) {
+        this.lastAccessedAt = lastAccessedAt;
     }
 
     public List<LogEntry> getLogEntries() {

@@ -1,11 +1,14 @@
 package com.caciopee.loganalyzer.service;
 
+import com.caciopee.loganalyzer.analysis.model.GraphExtraction;
+import com.caciopee.loganalyzer.analysis.util.LogPatternExtractor;
 import com.caciopee.loganalyzer.dto.*;
 import com.caciopee.loganalyzer.entity.LogEntry;
 import com.caciopee.loganalyzer.entity.LogEventType;
 import com.caciopee.loganalyzer.entity.LogImport;
 import com.caciopee.loganalyzer.repository.LogEntryRepository;
 import com.caciopee.loganalyzer.repository.LogImportRepository;
+import com.caciopee.loganalyzer.util.LogDisplayTextUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -13,21 +16,30 @@ import org.springframework.data.domain.Sort;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
 public class LogAnalysisService {
 
+    private static final long SLOW_THRESHOLD_MS = 2000L;
+    private static final Pattern FILTER_CODE_IN_MESSAGE = Pattern.compile(
+            "filter code\\s*\\[\\s*([^\\]]+?)\\s*]", Pattern.CASE_INSENSITIVE);
+
     private final LogEntryRepository logEntryRepository;
     private final LogImportRepository logImportRepository;
     private final LogBusinessExplanationService logBusinessExplanationService;
+    private final LogPatternExtractor logPatternExtractor;
 
     public LogAnalysisService(LogEntryRepository logEntryRepository,
                               LogImportRepository logImportRepository,
-                              LogBusinessExplanationService logBusinessExplanationService) {
+                              LogBusinessExplanationService logBusinessExplanationService,
+                              LogPatternExtractor logPatternExtractor) {
         this.logEntryRepository = logEntryRepository;
         this.logImportRepository = logImportRepository;
         this.logBusinessExplanationService = logBusinessExplanationService;
+        this.logPatternExtractor = logPatternExtractor;
     }
 
     public ImportAnalysisSummaryDto getImportSummary(Long importId) {
@@ -138,7 +150,22 @@ public class LogAnalysisService {
 
         Map<String, List<LogEntry>> grouped = new LinkedHashMap<>();
         for (LogEntry log : logs) {
-            String key = buildIncidentKey(log);
+            long duration = resolveLogDuration(log);
+            if (duration <= SLOW_THRESHOLD_MS) {
+                continue;
+            }
+
+            GraphExtraction extraction = logPatternExtractor.extractGraph(log);
+            String process = coalesce(
+                    extraction.getProcess(),
+                    log.getProcessName(),
+                    "INCONNU"
+            );
+            String filter = coalesce(
+                    extraction.getFilter(),
+                    extractFilterCodeFromMessageOrColumn(log)
+            );
+            String key = buildLatencyIncidentKey(log, process, filter);
             grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(log);
         }
 
@@ -151,7 +178,9 @@ public class LogAnalysisService {
         }
 
         incidents.sort(Comparator
-                .comparing((IncidentCandidateDto i) -> severityRank(i.getSeverity()))
+                .comparing((IncidentCandidateDto i) -> i.getMaxDurationMs() != null ? i.getMaxDurationMs() : 0L,
+                        Comparator.reverseOrder())
+                .thenComparing((IncidentCandidateDto i) -> severityRank(i.getSeverity()))
                 .thenComparing(IncidentCandidateDto::getFirstTimestamp, Comparator.nullsLast(Comparator.reverseOrder())));
 
         return incidents;
@@ -315,90 +344,56 @@ public class LogAnalysisService {
             return null;
         }
 
-        boolean hasJdbcFailure = containsAny(group,
-                "GENERICJDBCEXCEPTION",
-                "COULD NOT EXECUTE QUERY",
-                "COMPLETED WITH ERROR",
-                "DOSEARCH.CATCH");
-
-        boolean hasRuleNotFound = containsAny(group,
-                "NO RULE FOUND FOR THIS PARAMS",
-                "AUCUNE RÈGLE N'A ÉTÉ AFFECTÉ",
-                "AUCUNE RÃ¨GLE N'A Ã©TÃ© AFFECT");
-
-        boolean hasNoResult = containsAny(group, "0 ROW");
-        boolean hasTrigger = containsAny(group, "WAS FIRED", "IS COMPLETE");
         long maxDuration = extractMaxDuration(group);
-        boolean hasErrorLevel = group.stream().anyMatch(this::isError);
-
-        if (!hasJdbcFailure && !hasRuleNotFound && !hasNoResult && !hasTrigger && maxDuration <= 2000 && !hasErrorLevel) {
+        if (maxDuration <= SLOW_THRESHOLD_MS) {
             return null;
         }
+
+        GraphExtraction anchor = logPatternExtractor.extractGraph(
+                group.stream().max(Comparator.comparingLong(this::resolveLogDuration)).orElse(group.get(0))
+        );
+        String process = LogDisplayTextUtil.sanitize(coalesce(
+                anchor.getProcess(),
+                group.get(0).getProcessName(),
+                topProcessNameFromLogs(group)
+        ));
+        String filter = coalesce(
+                anchor.getFilter(),
+                extractFilterCodeFromMessageOrColumn(
+                        group.stream().max(Comparator.comparingLong(this::resolveLogDuration)).orElse(group.get(0))
+                ),
+                topFilterCodeFromLogs(group)
+        );
 
         IncidentCandidateDto dto = new IncidentCandidateDto();
         dto.setImportId(importId);
         dto.setSessionId(firstNonBlank(group.stream().map(LogEntry::getSessionId).toList()));
         dto.setBusinessKey(firstNonBlank(group.stream().map(LogEntry::getBusinessKey).toList()));
         dto.setCorrelationId(firstNonBlank(group.stream().map(LogEntry::getUserCorrelationId).toList()));
+        dto.setUserName(firstNonBlank(group.stream().map(LogEntry::getUserName).toList()));
+        dto.setProcessName(process);
+        dto.setFilterCode(notBlank(filter) ? LogDisplayTextUtil.sanitize(filter) : null);
+        dto.setLogCount(group.size());
+        dto.setErrorCount((int) group.stream().filter(this::isError).count());
+        dto.setMaxDurationMs(maxDuration > 0 ? maxDuration : null);
         dto.setFirstTimestamp(group.get(0).getLogTimestamp());
         dto.setLastTimestamp(group.get(group.size() - 1).getLogTimestamp());
 
-        if (hasJdbcFailure) {
-            dto.setIncidentType("QUERY_EXECUTION_FAILURE");
-            dto.setSeverity("HIGH");
-            dto.setConfidence("HIGH");
-            dto.setTitle("Échec d'exécution de requête");
-            dto.setExplanation("Le groupe contient une signature forte d'échec Hibernate/JDBC.");
-            dto.setProbableCause("Panne SQL/JDBC/Hibernate pendant l'exécution d'une recherche.");
-        } else if (maxDuration > 3000) {
+        String scope = LogDisplayTextUtil.sanitize(buildLatencyScopeLabel(process, filter));
+        if (maxDuration > 3000) {
             dto.setIncidentType("HIGH_LATENCY");
             dto.setSeverity("MEDIUM");
             dto.setConfidence("HIGH");
-            dto.setTitle("Latence élevée");
-            dto.setExplanation("Une étape du groupe dépasse 3000 ms.");
+            dto.setTitle("Latence élevée — " + scope);
+            dto.setExplanation("Une étape atteint " + maxDuration + " ms sur " + scope + ".");
             dto.setProbableCause("Requête complexe, volume de données, jointures multiples ou pipeline coûteux.");
-        } else if (maxDuration > 2000) {
+        } else {
             dto.setIncidentType("PERFORMANCE_WARNING");
             dto.setSeverity("LOW");
             dto.setConfidence("MEDIUM");
-            dto.setTitle("Exécution lente");
-            dto.setExplanation("Une étape du groupe dépasse 2000 ms.");
+            dto.setTitle("Exécution lente — " + scope);
+            dto.setExplanation("Une étape atteint " + maxDuration + " ms sur " + scope + ".");
             dto.setProbableCause("Volume, complexité SQL ou enrichissement de données.");
-        } else if (hasNoResult && hasRuleNotFound) {
-            dto.setIncidentType("NO_RESULT_AND_RULE_NOT_FOUND");
-            dto.setSeverity("LOW");
-            dto.setConfidence("MEDIUM");
-            dto.setTitle("Aucun résultat et aucune règle applicable");
-            dto.setExplanation("Le groupe ne montre pas de panne système, mais un cas métier sans résultat et sans règle.");
-            dto.setProbableCause("Filtres trop restrictifs ou absence de règle métier configurée.");
-        } else if (hasNoResult) {
-            dto.setIncidentType("NO_RESULT_FOUND");
-            dto.setSeverity("LOW");
-            dto.setConfidence("HIGH");
-            dto.setTitle("Aucun résultat");
-            dto.setExplanation("La requête s'est exécutée mais n'a retourné aucune donnée.");
-            dto.setProbableCause("Critères métier trop restrictifs.");
-        } else if (hasRuleNotFound) {
-            dto.setIncidentType("RULE_NOT_FOUND");
-            dto.setSeverity("LOW");
-            dto.setConfidence("HIGH");
-            dto.setTitle("Aucune règle applicable trouvée");
-            dto.setExplanation("Le groupe signale l'absence de règle métier pour cette transition.");
-            dto.setProbableCause("Aucune règle configurée pour ce contexte.");
-        } else if (hasTrigger) {
-            dto.setIncidentType("SCHEDULER_ACTIVITY");
-            dto.setSeverity("LOW");
-            dto.setConfidence("HIGH");
-            dto.setTitle("Activité scheduler");
-            dto.setExplanation("Détection d'un déclenchement scheduler normal.");
-            dto.setProbableCause("Exécution planifiée standard.");
-        } else {
-            dto.setIncidentType("GENERIC_SIGNAL");
-            dto.setSeverity("LOW");
-            dto.setConfidence("LOW");
-            dto.setTitle("Signal générique");
-            dto.setExplanation("Le groupe contient des signaux analytiques mais sans diagnostic fort.");
-            dto.setProbableCause("À confirmer avec plus de contexte.");
         }
 
         dto.setEvidenceMessages(group.stream()
@@ -417,17 +412,85 @@ public class LogAnalysisService {
         return dto;
     }
 
-    private String buildIncidentKey(LogEntry log) {
-        if (notBlank(log.getSessionId())) {
-            return "SESSION:" + log.getSessionId();
+    private String buildLatencyIncidentKey(LogEntry log, String process, String filter) {
+        String scope = notBlank(log.getSessionId())
+                ? "SESSION:" + log.getSessionId()
+                : notBlank(log.getBusinessKey())
+                ? "BK:" + log.getBusinessKey()
+                : notBlank(log.getUserCorrelationId())
+                ? "CORR:" + log.getUserCorrelationId()
+                : "LOG:" + (log.getId() != null ? log.getId() : UUID.randomUUID());
+        return scope + "|PROC:" + normalizeKeyPart(process) + "|FILT:" + normalizeKeyPart(filter);
+    }
+
+    private String buildLatencyScopeLabel(String process, String filter) {
+        if (notBlank(filter)) {
+            return trim(process) + " / filtre " + trim(filter);
         }
-        if (notBlank(log.getBusinessKey())) {
-            return "BK:" + log.getBusinessKey();
+        return trim(process);
+    }
+
+    private String normalizeKeyPart(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private long resolveLogDuration(LogEntry log) {
+        if (log.getDurationMs() != null && log.getDurationMs() > 0) {
+            return log.getDurationMs();
         }
-        if (notBlank(log.getUserCorrelationId())) {
-            return "CORR:" + log.getUserCorrelationId();
+        return extractDurationMs(safe(log.getMessage()).toUpperCase());
+    }
+
+    private String topFilterCodeFromLogs(List<LogEntry> logs) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (LogEntry log : logs) {
+            String fromGraph = cleanFilterCode(logPatternExtractor.extractGraph(log).getFilter());
+            if (notBlank(fromGraph)) {
+                counts.merge(fromGraph, 1L, Long::sum);
+            }
+            String fromRaw = cleanFilterCode(extractFilterCodeFromMessageOrColumn(log));
+            if (notBlank(fromRaw)) {
+                counts.merge(fromRaw, 1L, Long::sum);
+            }
         }
-        return "FALLBACK:" + trim(log.getEventType()) + ":" + trim(log.getProcessName());
+        return counts.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+    }
+
+    private String extractFilterCodeFromMessageOrColumn(LogEntry log) {
+        if (log == null) {
+            return null;
+        }
+        String message = safe(log.getMessage());
+        Matcher matcher = FILTER_CODE_IN_MESSAGE.matcher(message);
+        if (matcher.find()) {
+            return cleanFilterCode(matcher.group(1));
+        }
+        String column = safe(log.getProcessName());
+        if (column.toLowerCase(Locale.ROOT).startsWith("processfilter-")) {
+            String[] parts = column.split("-");
+            if (parts.length > 2) {
+                String middle = parts[2].trim();
+                if (notBlank(middle) && !middle.matches("\\d+")) {
+                    return middle;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String cleanFilterCode(String raw) {
+        if (!notBlank(raw)) {
+            return null;
+        }
+        String code = raw.trim();
+        int pipe = code.indexOf('|');
+        if (pipe > 0) {
+            code = code.substring(0, pipe).trim();
+        }
+        return notBlank(code) ? code : null;
     }
 
     private StoryStepDto toStep(LogEntry entry) {
@@ -455,6 +518,17 @@ public class LogAnalysisService {
                 .limit(limit)
                 .map(e -> new CountValueDto(e.getKey(), e.getValue()))
                 .toList();
+    }
+
+    private String topProcessNameFromLogs(List<LogEntry> logs) {
+        return logs.stream()
+                .map(LogEntry::getProcessName)
+                .filter(this::notBlank)
+                .collect(Collectors.groupingBy(v -> v, Collectors.counting()))
+                .entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(firstNonBlank(logs.stream().map(LogEntry::getProcessName).toList()));
     }
 
     private List<CountValueDto> mapCountRows(List<Object[]> rows, int limit) {
@@ -492,8 +566,10 @@ public class LogAnalysisService {
     private long extractMaxDuration(List<LogEntry> logs) {
         long max = -1L;
         for (LogEntry log : logs) {
-            String msg = safe(log.getMessage()).toUpperCase();
-            long duration = extractDurationMs(msg);
+            if (log.getDurationMs() != null && log.getDurationMs() > max) {
+                max = log.getDurationMs();
+            }
+            long duration = extractDurationMs(safe(log.getMessage()).toUpperCase());
             if (duration > max) {
                 max = duration;
             }
@@ -554,6 +630,18 @@ public class LogAnalysisService {
         for (String value : values) {
             if (notBlank(value)) {
                 return value;
+            }
+        }
+        return null;
+    }
+
+    private String coalesce(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (notBlank(value)) {
+                return value.trim();
             }
         }
         return null;

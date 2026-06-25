@@ -60,13 +60,15 @@ public class SecurityConfig {
                 )
 
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
+                        .requestMatchers(HttpMethod.GET,
                                 "/",
                                 "/index.html",
-                                "/style.css",
-                                "/auth.js",
-                                "/app.js",
-                                "/favicon.ico"
+                                "/favicon.ico",
+                                "/error",
+                                "/*.html",
+                                "/*.css",
+                                "/*.js",
+                                "/*.ico"
                         ).permitAll()
 
                         .requestMatchers(HttpMethod.GET, "/test").permitAll()
@@ -78,6 +80,9 @@ public class SecurityConfig {
                         .requestMatchers("/logs/**").authenticated()
                         .requestMatchers("/imports/**").authenticated()
                         .requestMatchers("/analysis/**").authenticated()
+                        .requestMatchers("/assistant/**").authenticated()
+                        .requestMatchers("/explorer/**").authenticated()
+                        .requestMatchers("/workflow-analysis/**").authenticated()
 
                         .anyRequest().authenticated()
                 )

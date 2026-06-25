@@ -138,6 +138,100 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
     List<Object[]> countCorrelationIdsByImport(@Param("importId") Long importId);
 
     @Query("""
+            select e.userName, count(e)
+            from LogEntry e
+            where e.logImport.id = :importId
+              and e.userName is not null
+              and trim(e.userName) <> ''
+            group by e.userName
+            order by count(e) desc
+            """)
+    List<Object[]> countUsersByImport(@Param("importId") Long importId);
+
+    @Query("""
+            select count(distinct e.userName)
+            from LogEntry e
+            where e.logImport.id = :importId
+              and e.userName is not null
+              and trim(e.userName) <> ''
+            """)
+    long countDistinctUsersByImport(@Param("importId") Long importId);
+
+    @Query("""
+            select e.userName, count(e)
+            from LogEntry e
+            where e.logImport.id = :importId
+              and e.isError = true
+              and e.userName is not null
+              and trim(e.userName) <> ''
+            group by e.userName
+            order by count(e) desc
+            """)
+    List<Object[]> countErrorsByUserForImport(@Param("importId") Long importId);
+
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM log_entries
+            WHERE import_id = :importId
+              AND (
+                    duration_ms >= :threshold
+                 OR (duration_ms IS NULL AND (
+                        upper(coalesce(message, '')) LIKE '%TOOK [%'
+                     OR upper(coalesce(message, '')) LIKE '%TOOK %MS%'
+                     OR upper(coalesce(raw_log, '')) LIKE '%TOOK [%'
+                 ))
+              )
+            """, nativeQuery = true)
+    long countSlowLogsByImport(@Param("importId") Long importId, @Param("threshold") long threshold);
+
+    @Query(value = """
+            SELECT COALESCE(MAX(
+                CASE
+                    WHEN duration_ms IS NOT NULL THEN duration_ms
+                    ELSE NULL
+                END
+            ), 0)
+            FROM log_entries
+            WHERE import_id = :importId
+            """, nativeQuery = true)
+    Long maxDurationMsByImport(@Param("importId") Long importId);
+
+    @Query(value = """
+            SELECT COALESCE(NULLIF(TRIM(source_file_name), ''), '—') AS source_file_name,
+                   COALESCE(NULLIF(TRIM(source_relative_path), ''), COALESCE(NULLIF(TRIM(source_file_name), ''), '—')) AS source_relative_path,
+                   COUNT(*) AS log_count,
+                   SUM(CASE WHEN is_error THEN 1 ELSE 0 END) AS error_count,
+                   SUM(CASE
+                         WHEN duration_ms >= 2000 THEN 1
+                         WHEN duration_ms IS NULL AND (
+                              upper(coalesce(message, '')) LIKE '%TOOK [%'
+                           OR upper(coalesce(message, '')) LIKE '%TOOK %MS%'
+                           OR upper(coalesce(raw_log, '')) LIKE '%TOOK [%'
+                         ) THEN 1
+                         ELSE 0
+                       END) AS slow_count,
+                   MAX(duration_ms) AS max_duration_ms,
+                   MIN(log_timestamp) AS first_ts,
+                   MAX(log_timestamp) AS last_ts
+            FROM log_entries
+            WHERE import_id = :importId
+            GROUP BY 1, 2
+            ORDER BY log_count DESC
+            """, nativeQuery = true)
+    List<Object[]> aggregateSourceFilesByImport(@Param("importId") Long importId);
+
+    @Query("""
+            select count(e)
+            from LogEntry e
+            where e.logImport.id = :importId
+              and (
+                    upper(coalesce(e.message, '')) like '%UUID [%'
+                 or upper(coalesce(e.rawLog, '')) like '%UUID [%'
+              )
+            """)
+    long countUuidTaggedLinesByImport(@Param("importId") Long importId);
+
+    @Query("""
             select e
             from LogEntry e
             where e.logImport.id = :importId

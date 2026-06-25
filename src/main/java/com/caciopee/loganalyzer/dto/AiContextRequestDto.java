@@ -10,6 +10,14 @@ public class AiContextRequestDto {
     private LocalDateTime dateFrom;
     private LocalDateTime dateTo;
     private Integer maxEvidenceLogs = 20;
+    /** Question utilisateur (chat) : cible processus/filtres mentionnés dans la question. */
+    private String focusQuery;
+    /** Périmètre navigation graphe (optionnel). */
+    private String scopeProcess;
+    private String scopeAction;
+    private String scopeFilter;
+    private String scopeNodeType;
+    private String scopeNodeLabel;
 
     public List<Long> getImportIds() { return importIds; }
     public void setImportIds(List<Long> importIds) { this.importIds = importIds; }
@@ -28,4 +36,22 @@ public class AiContextRequestDto {
 
     public Integer getMaxEvidenceLogs() { return maxEvidenceLogs; }
     public void setMaxEvidenceLogs(Integer maxEvidenceLogs) { this.maxEvidenceLogs = maxEvidenceLogs; }
+
+    public String getFocusQuery() { return focusQuery; }
+    public void setFocusQuery(String focusQuery) { this.focusQuery = focusQuery; }
+
+    public String getScopeProcess() { return scopeProcess; }
+    public void setScopeProcess(String scopeProcess) { this.scopeProcess = scopeProcess; }
+
+    public String getScopeAction() { return scopeAction; }
+    public void setScopeAction(String scopeAction) { this.scopeAction = scopeAction; }
+
+    public String getScopeFilter() { return scopeFilter; }
+    public void setScopeFilter(String scopeFilter) { this.scopeFilter = scopeFilter; }
+
+    public String getScopeNodeType() { return scopeNodeType; }
+    public void setScopeNodeType(String scopeNodeType) { this.scopeNodeType = scopeNodeType; }
+
+    public String getScopeNodeLabel() { return scopeNodeLabel; }
+    public void setScopeNodeLabel(String scopeNodeLabel) { this.scopeNodeLabel = scopeNodeLabel; }
 }

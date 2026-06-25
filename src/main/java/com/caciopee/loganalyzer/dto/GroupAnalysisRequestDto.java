@@ -9,6 +9,7 @@ public class GroupAnalysisRequestDto {
     private String groupKey;
     private LocalDateTime dateFrom;
     private LocalDateTime dateTo;
+    private Boolean forceLocal;
 
     public List<Long> getImportIds() { return importIds; }
     public void setImportIds(List<Long> importIds) { this.importIds = importIds; }
@@ -24,4 +25,7 @@ public class GroupAnalysisRequestDto {
 
     public LocalDateTime getDateTo() { return dateTo; }
     public void setDateTo(LocalDateTime dateTo) { this.dateTo = dateTo; }
+
+    public Boolean getForceLocal() { return forceLocal; }
+    public void setForceLocal(Boolean forceLocal) { this.forceLocal = forceLocal; }
 }

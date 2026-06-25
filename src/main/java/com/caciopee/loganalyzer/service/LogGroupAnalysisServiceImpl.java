@@ -1,11 +1,14 @@
 package com.caciopee.loganalyzer.service;
 
+import com.caciopee.loganalyzer.analysis.model.GraphExtraction;
+import com.caciopee.loganalyzer.analysis.util.LogPatternExtractor;
 import com.caciopee.loganalyzer.dto.GroupAnalysisItemDto;
 import com.caciopee.loganalyzer.dto.GroupAnalysisRequestDto;
 import com.caciopee.loganalyzer.dto.GroupAnalysisResponseDto;
 import com.caciopee.loganalyzer.entity.LogEntry;
 import com.caciopee.loganalyzer.repository.LogEntryRepository;
 import com.caciopee.loganalyzer.repository.LogEntrySpecifications;
+import com.caciopee.loganalyzer.util.LogDisplayTextUtil;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -19,33 +22,15 @@ import java.util.regex.Pattern;
 public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
 
     private final LogEntryRepository logEntryRepository;
-
-    private static final Pattern FILTER_PATTERN =
-            Pattern.compile("filter code \\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern CLASS_PATTERN =
-            Pattern.compile("className \\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern PROCESS_PATTERN =
-            Pattern.compile("processName \\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern TASK_PATTERN =
-            Pattern.compile("taskName \\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern ACTION_PATTERN =
-            Pattern.compile("actionName \\[([^\\]]+)]", Pattern.CASE_INSENSITIVE);
+    private final LogPatternExtractor logPatternExtractor;
 
     private static final Pattern ROW_PATTERN =
             Pattern.compile("(\\d+)\\s*row", Pattern.CASE_INSENSITIVE);
 
-    private static final Pattern TOOK_PATTERN =
-            Pattern.compile("took \\[?(\\d+)]?\\s*ms", Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern MEMORY_PATTERN =
-            Pattern.compile("memory usage \\(Mo\\).*?]\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
-
-    public LogGroupAnalysisServiceImpl(LogEntryRepository logEntryRepository) {
+    public LogGroupAnalysisServiceImpl(LogEntryRepository logEntryRepository,
+                                       LogPatternExtractor logPatternExtractor) {
         this.logEntryRepository = logEntryRepository;
+        this.logPatternExtractor = logPatternExtractor;
     }
 
     @Override
@@ -135,44 +120,161 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
     }
 
     private List<GroupAnalysisItemDto> buildWarnings(List<LogEntry> logs) {
-        return logs.stream()
-                .filter(l -> contains(l.getMessage(), "no rule found") || contains(l.getMessage(), "aucune r") || eq(l.getLevel(), "WARN"))
-                .map(l -> singleItem("WARNING", shortMessage(l.getMessage()), l, warningDiagnostic(l)))
-                .limit(100)
+        Map<String, ItemAccumulator> map = new LinkedHashMap<>();
+        for (LogEntry log : logs) {
+            if (!isWarningLog(log)) continue;
+            String key = warningGroupKey(log);
+            map.computeIfAbsent(key, k -> new ItemAccumulator("WARNING", k)).add(log);
+        }
+        return map.values().stream()
+                .map(acc -> {
+                    GroupAnalysisItemDto dto = acc.toDto();
+                    dto.setDiagnostic("Transition sans règle ou avertissement workflow — à vérifier si une règle métier était attendue.");
+                    return dto;
+                })
+                .sorted(Comparator.comparing(GroupAnalysisItemDto::getCount, Comparator.nullsLast(Long::compareTo)).reversed())
+                .limit(20)
                 .toList();
     }
 
     private List<GroupAnalysisItemDto> buildZeroResults(List<LogEntry> logs) {
-        return logs.stream()
-                .filter(l -> contains(l.getMessage(), "0 row") || contains(l.getMessage(), "[0] row fetched"))
-                .map(l -> {
-                    String filter = extractFilter(l);
-                    String name = filter != null ? filter : "Recherche sans résultat";
-                    return singleItem("ZERO_RESULT", name, l, "Cette recherche n’a retourné aucun résultat. À vérifier si l’objet métier était attendu.");
+        Map<String, ItemAccumulator> map = new LinkedHashMap<>();
+        for (LogEntry log : logs) {
+            if (!contains(log.getMessage(), "0 row") && !contains(log.getMessage(), "[0] row fetched")) continue;
+            String filter = extractFilter(log);
+            String name = filter != null && !filter.isBlank() ? filter : "Recherche sans filtre identifié";
+            map.computeIfAbsent(name, k -> new ItemAccumulator("ZERO_RESULT", k)).add(log);
+        }
+        return map.values().stream()
+                .map(acc -> {
+                    GroupAnalysisItemDto dto = acc.toDto();
+                    dto.setDiagnostic("Recherche sans résultat — à confirmer avec le métier si un objet était attendu.");
+                    return dto;
                 })
-                .limit(100)
+                .sorted(Comparator.comparing(GroupAnalysisItemDto::getCount, Comparator.nullsLast(Long::compareTo)).reversed())
+                .limit(20)
                 .toList();
     }
 
     private List<GroupAnalysisItemDto> buildPerformanceSignals(List<LogEntry> logs) {
-        List<GroupAnalysisItemDto> result = new ArrayList<>();
+        Map<String, PerfAccumulator> slow = new LinkedHashMap<>();
+        Map<Integer, Long> memoryCounts = new HashMap<>();
 
         for (LogEntry log : logs) {
-            String msg = safe(log.getMessage());
-
-            Long duration = extractLong(TOOK_PATTERN, msg);
-            Long memory = extractLong(MEMORY_PATTERN, msg);
+            GraphExtraction ex = logPatternExtractor.extractGraph(log);
+            Long duration = ex.getDurationMs();
+            Integer memory = ex.getMemoryMo();
 
             if (duration != null && duration >= 1000) {
-                result.add(singleItem("PERFORMANCE", "Étape lente " + duration + " ms", log, "Durée élevée détectée."));
+                String filter = nullSafe(ex.getFilter(), "sans filtre");
+                String process = firstNonBlank(ex.getProcess(), log.getProcessName(), "process inconnu");
+                String key = process + "|" + filter;
+                slow.computeIfAbsent(key, k -> new PerfAccumulator(process, filter)).observeDuration(duration);
             }
-
             if (memory != null && memory >= 8000) {
-                result.add(singleItem("MEMORY", "Mémoire élevée " + memory + " Mo", log, "Consommation mémoire élevée observée."));
+                memoryCounts.merge(memory, 1L, Long::sum);
             }
         }
 
-        return result.stream().limit(100).toList();
+        List<GroupAnalysisItemDto> result = new ArrayList<>();
+        slow.values().stream()
+                .sorted(Comparator.comparingLong((PerfAccumulator p) -> p.maxDurationMs).reversed())
+                .limit(12)
+                .forEach(p -> {
+                    GroupAnalysisItemDto dto = new GroupAnalysisItemDto();
+                    dto.setType("PERFORMANCE");
+                    dto.setName(LogDisplayTextUtil.sanitize(
+                            "Lenteur — " + p.process + " / " + p.filter + " (max " + p.maxDurationMs + " ms)"));
+                    dto.setCount(p.count);
+                    dto.setDiagnostic(p.count > 1
+                            ? p.count + " mesures, durée max " + p.maxDurationMs + " ms."
+                            : "Durée élevée : " + p.maxDurationMs + " ms.");
+                    result.add(dto);
+                });
+
+        memoryCounts.entrySet().stream()
+                .sorted(Map.Entry.<Integer, Long>comparingByValue().reversed())
+                .limit(6)
+                .forEach(e -> {
+                    GroupAnalysisItemDto dto = new GroupAnalysisItemDto();
+                    dto.setType("MEMORY");
+                    dto.setName("Mémoire ~" + e.getKey() + " Mo");
+                    dto.setCount(e.getValue());
+                    dto.setDiagnostic(e.getValue() + " mesure(s) autour de " + e.getKey() + " Mo.");
+                    result.add(dto);
+                });
+        return result;
+    }
+
+    private boolean isWarningLog(LogEntry log) {
+        return contains(log.getMessage(), "no rule found")
+                || contains(log.getMessage(), "aucune r")
+                || eq(log.getLevel(), "WARN")
+                || eq(log.getLevel(), "WARNING");
+    }
+
+    private static final Pattern BRACKET_FIELD =
+            Pattern.compile("(PROCESS_NAME|ACTION_NAME|TASK_NAME)\\s*\\[([^\\]]*)\\]", Pattern.CASE_INSENSITIVE);
+
+    private String warningGroupKey(LogEntry log) {
+        String msg = safe(log.getMessage());
+        GraphExtraction ex = logPatternExtractor.extractGraph(log);
+        String process = sanitizeLabel(firstNonBlank(
+                ex.getProcess(), log.getProcessName(), extractBracketField(msg, "PROCESS_NAME"), "process inconnu"));
+        String action = sanitizeLabel(firstNonBlank(
+                ex.getAction(), extractBracketField(msg, "ACTION_NAME"), "action ?"));
+        String task = sanitizeLabel(firstNonBlank(
+                ex.getTask(), extractBracketField(msg, "TASK_NAME"), "tâche ?"));
+        if (contains(msg, "no rule found") || contains(msg, "aucune r")) {
+            return "Règle absente — " + process + " / " + action + " / " + task;
+        }
+        return "Avertissement — " + process;
+    }
+
+    private String extractBracketField(String msg, String field) {
+        if (msg == null || field == null) return null;
+        Matcher m = BRACKET_FIELD.matcher(msg);
+        while (m.find()) {
+            if (!field.equalsIgnoreCase(m.group(1))) continue;
+            String value = m.group(2).trim();
+            if (value.isBlank() || "null".equalsIgnoreCase(value)) continue;
+            return value;
+        }
+        return null;
+    }
+
+    private String sanitizeLabel(String value) {
+        return LogDisplayTextUtil.sanitize(nullSafe(value, "—"));
+    }
+
+    private String firstNonBlank(String a, String b, String fallback) {
+        if (a != null && !a.isBlank() && !"null".equalsIgnoreCase(a)) return a;
+        if (b != null && !b.isBlank() && !"null".equalsIgnoreCase(b)) return b;
+        return fallback;
+    }
+
+    private String firstNonBlank(String a, String b, String c, String fallback) {
+        if (a != null && !a.isBlank() && !"null".equalsIgnoreCase(a)) return a;
+        if (b != null && !b.isBlank() && !"null".equalsIgnoreCase(b)) return b;
+        if (c != null && !c.isBlank() && !"null".equalsIgnoreCase(c)) return c;
+        return fallback;
+    }
+
+    private static final class PerfAccumulator {
+        final String process;
+        final String filter;
+        long count = 0;
+        long maxDurationMs = 0;
+
+        PerfAccumulator(String process, String filter) {
+            this.process = process;
+            this.filter = filter;
+        }
+
+        void observeDuration(long ms) {
+            count++;
+            maxDurationMs = Math.max(maxDurationMs, ms);
+        }
     }
 
     private List<String> buildTimeline(List<LogEntry> logs) {
@@ -182,7 +284,7 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
             String msg = safe(log.getMessage());
 
             if (isImportant(msg)) {
-                timeline.add(formatTime(log) + " — " + humanize(log));
+                timeline.add(LogDisplayTextUtil.sanitize(formatTime(log) + " — " + humanize(log)));
             }
 
             if (timeline.size() >= 80) break;
@@ -196,12 +298,16 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
         String mainProcess = firstName(r.getProcesses());
         StringBuilder sb = new StringBuilder();
 
-        sb.append("L’utilisateur ").append(nullSafe(user, "non identifié"));
+        if ("userName".equals(r.getGroupBy()) && r.getGroupKey() != null) {
+            sb.append("Sur la période analysée, l'utilisateur ").append(r.getGroupKey());
+        } else {
+            sb.append("L'utilisateur ").append(nullSafe(user, "non identifié"));
+        }
 
         if (mainProcess != null) {
-            sb.append(" travaille principalement sur le process ").append(mainProcess).append(".");
+            sb.append(" a principalement utilisé le processus ").append(mainProcess).append(".");
         } else {
-            sb.append(" exécute une suite d’actions applicatives.");
+            sb.append(" a exécuté une suite d’actions applicatives.");
         }
 
         sb.append("\n\n");
@@ -225,7 +331,15 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
         }
 
         if (r.getZeroResultCount() != null && r.getZeroResultCount() > 0) {
-            sb.append("Certaines recherches retournent 0 résultat. Ce n’est pas forcément bloquant, mais ce sont des points à vérifier dans le diagnostic.");
+            sb.append("De nombreuses recherches (").append(r.getZeroResultCount())
+                    .append(") ne retournent aucune ligne : cela peut être normal si aucun objet n’était attendu, mais cela mérite une vérification métier.");
+            sb.append("\n\n");
+        }
+
+        long perfSignals = r.getPerformanceSignals() != null ? r.getPerformanceSignals().size() : 0;
+        if (perfSignals > 0) {
+            sb.append("Des signaux de lenteur ou de consommation mémoire ont été observés sur ")
+                    .append(perfSignals).append(" étape(s).");
             sb.append("\n\n");
         }
 
@@ -272,11 +386,12 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
 
     private String humanize(LogEntry log) {
         String msg = safe(log.getMessage());
+        GraphExtraction ex = logPatternExtractor.extractGraph(log);
 
-        String process = extractProcess(log);
-        String action = extractAction(log);
-        String filter = extractFilter(log);
-        String object = extractBusinessObject(log);
+        String process = ex.getProcess();
+        String action = ex.getAction();
+        String filter = ex.getFilter();
+        String object = ex.getObject();
 
         if (contains(msg, "START fire rules")) {
             return "début d’exécution des règles" + part("process", process) + part("action", action);
@@ -322,6 +437,27 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
             return "opération de sauvegarde détectée" + part("objet", object);
         }
 
+        if (contains(msg, "memory usage")) {
+            Integer mo = ex.getMemoryMo();
+            if (mo == null) {
+                Long moVal = extractLong(Pattern.compile("(\\d{3,5})\\s*$"), msg);
+                if (moVal == null) {
+                    moVal = extractLong(Pattern.compile("\\]\\s*(\\d{3,5})\\s*$"), msg);
+                }
+                mo = moVal != null ? moVal.intValue() : null;
+            }
+            String f = filter != null ? filter : extractBetween(msg, "filter code [", "]");
+            return "mémoire observée" + (mo != null ? " : " + mo + " Mo" : "") + part("filtre", f);
+        }
+
+        if (contains(msg, "loadListChilds") || contains(msg, "prepareSearchByRoot")) {
+            return "parcours hiérarchique" + part("filtre", filter) + part("objet", object);
+        }
+
+        if (contains(msg, "0 row") || contains(msg, "[0] row fetched")) {
+            return "recherche sans résultat" + part("filtre", filter) + part("objet", object);
+        }
+
         return shortMessage(msg);
     }
 
@@ -344,30 +480,19 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
     }
 
     private String extractProcess(LogEntry log) {
-        String fromMsg = extract(PROCESS_PATTERN, log.getMessage());
-        return firstNonBlank(fromMsg, log.getProcessName());
+        return logPatternExtractor.extractGraph(log).getProcess();
     }
 
     private String extractAction(LogEntry log) {
-        String msg = safe(log.getMessage());
-        String action = extract(ACTION_PATTERN, msg);
-
-        if (action != null) return action;
-
-        if (msg.contains("|")) {
-            String[] p = msg.split("\\|");
-            if (p.length >= 4 && !p[3].isBlank()) return p[3].trim();
-        }
-
-        return null;
+        return logPatternExtractor.extractGraph(log).getAction();
     }
 
     private String extractFilter(LogEntry log) {
-        return extract(FILTER_PATTERN, log.getMessage());
+        return logPatternExtractor.extractGraph(log).getFilter();
     }
 
     private String extractBusinessObject(LogEntry log) {
-        return extract(CLASS_PATTERN, log.getMessage());
+        return logPatternExtractor.extractGraph(log).getObject();
     }
 
     private String warningDiagnostic(LogEntry log) {
@@ -380,12 +505,12 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
     private GroupAnalysisItemDto singleItem(String type, String name, LogEntry log, String diagnostic) {
         GroupAnalysisItemDto dto = new GroupAnalysisItemDto();
         dto.setType(type);
-        dto.setName(name);
+        dto.setName(LogDisplayTextUtil.sanitize(name));
         dto.setCount(1L);
         dto.setFirstTimestamp(log.getLogTimestamp());
         dto.setLastTimestamp(log.getLogTimestamp());
         dto.setDiagnostic(diagnostic);
-        dto.setExamples(List.of(shortMessage(log.getMessage())));
+        dto.setExamples(List.of(LogDisplayTextUtil.sanitize(shortMessage(log.getMessage()))));
         return dto;
     }
 
@@ -501,12 +626,12 @@ public class LogGroupAnalysisServiceImpl implements LogGroupAnalysisService {
         GroupAnalysisItemDto toDto() {
             GroupAnalysisItemDto dto = new GroupAnalysisItemDto();
             dto.setType(type);
-            dto.setName(name);
+            dto.setName(LogDisplayTextUtil.sanitize(name));
             dto.setCount(count);
             dto.setFirstTimestamp(first);
             dto.setLastTimestamp(last);
             dto.setDiagnostic(defaultDiagnostic(type, name));
-            dto.setExamples(examples);
+            dto.setExamples(examples.stream().map(LogDisplayTextUtil::sanitize).limit(3).toList());
             return dto;
         }
 

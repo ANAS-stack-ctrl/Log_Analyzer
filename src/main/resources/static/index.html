@@ -3,19 +3,43 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <title>Log Analyzer</title>
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/style.css?v=20260736" />
+    <style>
+        /* Panneaux Expert : masqués sauf ouverture explicite (résiste au cache JS) */
+        #expertResultsDock:not(.expert-dock-open) {
+            display: none !important;
+        }
+        #expertResultsDock .expert-result-panel:not(.expert-panel-open) {
+            display: none !important;
+        }
+    </style>
 </head>
 <body>
 <div class="container">
     <header class="page-header">
         <div>
             <h1>Log Analyzer</h1>
-            <p class="subtitle">Compréhension des logs par workflow et par ligne</p>
+            <p class="subtitle">Comprenez vos logs WORKS et résolvez les incidents rapidement</p>
         </div>
     </header>
 
-    <section class="card" id="loginSection">
+    <div class="active-import-bar hidden" id="activeImportBar">
+        <label for="activeImportSelect">Import actif</label>
+        <select id="activeImportSelect"></select>
+        <span id="activeImportLabel" class="active-import-label"></span>
+    </div>
+
+    <nav class="main-nav hidden" id="mainNav">
+        <button type="button" class="main-nav-btn" data-main-tab="home" title="Vue d'ensemble">Accueil</button>
+        <button type="button" class="main-nav-btn" data-main-tab="import" title="Charger des fichiers logs">1. Importer</button>
+        <button type="button" class="main-nav-btn" data-main-tab="diagnose" title="Fiche incident et assistant">2. Diagnostiquer</button>
+        <button type="button" class="main-nav-btn" data-main-tab="compare" title="Comparaisons, régressions MEP et recherche transversale">Comparaison</button>
+        <button type="button" class="main-nav-btn" data-main-tab="advanced" title="Analyses et graphe détaillé">Expert</button>
+    </nav>
+
+    <section class="card hidden" id="loginSection">
         <h2>Connexion</h2>
         <form id="loginForm">
             <div class="field">
@@ -34,24 +58,50 @@
         </form>
     </section>
 
-    <section class="card hidden" id="userSection">
+    <section class="card hidden" data-panel="home" id="homeSection">
         <div class="card-header-inline">
-            <h2>Utilisateur connecté</h2>
+            <h2>Accueil</h2>
             <button id="logoutBtn" type="button" class="secondary-btn">Se déconnecter</button>
         </div>
-        <div id="userInfo"></div>
+        <div id="userInfo" class="user-info-compact"></div>
+        <div class="actions wrap" style="margin-bottom:12px">
+            <button id="refreshHomeBtn" type="button" class="secondary-btn">Rafraîchir</button>
+        </div>
+        <div id="homeDashboard"></div>
+        <div id="archiveAdminPanel" class="archive-admin-panel hidden"></div>
     </section>
 
+    <div class="hidden" data-panel="import">
     <section class="card hidden" id="uploadSection">
-        <h2>Importer des fichiers logs</h2>
+        <h2>Étape 1 — Importer vos logs</h2>
+        <p class="section-hint">Formats acceptés : fichiers <code>.log</code>, <code>.txt</code>, <code>.out</code> ou archive <code>.zip</code> (max 100 Mo par envoi navigateur).
+            Plusieurs fichiers d’un même dossier sont regroupés en <strong>un seul import</strong>.</p>
 
         <div class="field">
-            <label for="logFiles">Fichiers logs</label>
-            <input id="logFiles" type="file" multiple />
+            <label for="logFiles">Choisir un ou plusieurs fichiers</label>
+            <input id="logFiles" type="file" multiple accept=".log,.txt,.zip,.out" />
+        </div>
+
+        <div class="field">
+            <label for="logFolderFiles">Ou choisir un dossier entier</label>
+            <input id="logFolderFiles" type="file" webkitdirectory directory multiple />
+            <p id="logFolderSelectionHint" class="muted-text">Aucun dossier sélectionné.</p>
+        </div>
+
+        <div class="field folder-import-dev">
+            <label for="localFolderPath">Importer depuis un chemin local (serveur — dev)</label>
+            <input id="localFolderPath" type="text" placeholder="Ex : C:\logs\mon-dossier" />
+            <p class="muted-text">Lit les fichiers directement sur le disque : pas de limite 100 Mo. Le dossier doit être accessible par l’application.</p>
+        </div>
+
+        <div id="uploadProgressWrap" class="upload-progress-wrap hidden">
+            <div class="progress-bar-track"><div id="uploadProgressBar" class="progress-bar-fill"></div></div>
+            <p id="uploadProgressLabel" class="muted-text">Envoi en cours…</p>
         </div>
 
         <div class="actions">
-            <button id="uploadBtn" type="button">Importer</button>
+            <button id="uploadBtn" type="button">Lancer l'import</button>
+            <button id="localFolderImportBtn" type="button" class="secondary-btn">Importer le dossier local</button>
         </div>
     </section>
 
@@ -61,6 +111,9 @@
             <button id="fillImportIdBtn" type="button" class="secondary-btn">Utiliser le dernier importId</button>
         </div>
         <pre id="uploadResult"></pre>
+        <div id="uploadQualityHint"></div>
+        <div id="importAnomaliesPanel" class="import-anomalies-panel" aria-live="polite"></div>
+        <div id="latencyOriginPanelImport" class="latency-origin-panel" aria-live="polite"></div>
     </section>
 
     <section class="card hidden" id="importsSection">
@@ -69,31 +122,181 @@
             <button id="refreshImportsBtn" type="button" class="secondary-btn">Rafraîchir</button>
         </div>
         <div id="importsResult"></div>
+        <div id="importDetailPanel" class="import-detail-panel hidden" aria-live="polite"></div>
     </section>
+    </div>
 
-    <section class="card hidden" id="analysisSection">
-        <h2>Analyse par workflow</h2>
+    <section class="card hidden" data-panel="diagnose" id="diagnosticSection">
+        <h2>Étape 2 — Comprendre un incident</h2>
+        <p class="section-hint">Une <strong>session</strong> = le 2ᵉ champ du log (ex. <code>1769540103782</code>), pas l’UUID en fin de ligne.</p>
 
-        <div class="analysis-grid">
-            <div class="field">
-                <label for="importIdInput">Import ID</label>
-                <input id="importIdInput" type="text" placeholder="Ex: 1" />
+        <div class="employee-wizard">
+            <div class="wizard-step"><span class="step-num">1</span> Import actif sélectionné en haut</div>
+            <div class="wizard-step"><span class="step-num">2</span> Scénario (optionnel)
+                <select id="scenarioPresetSelect">
+                    <option value="">— Choisir —</option>
+                    <option value="incident">Incident / erreurs</option>
+                    <option value="zeroRow">0 row</option>
+                    <option value="ruleMissing">Règle manquante</option>
+                    <option value="supervision">Supervision traction</option>
+                    <option value="tomcat">Run rules tomcat</option>
+                </select>
+                <span id="scenarioHint" class="muted-text"></span>
+            </div>
+            <div class="wizard-step wizard-step-input">
+                <span class="step-num">3</span>
+                <label for="diagnosticSessionId">Session technique</label>
+                <input id="diagnosticSessionId" type="text" placeholder="Ex: 1769540103782" />
+                <button id="loadDiagnosticBtn" type="button">Générer la fiche diagnostic</button>
             </div>
         </div>
 
-        <div class="actions wrap">
-            <button id="v2Btn" type="button">Analyse V2 compréhensible</button>
-            <button id="clearAnalysisBtn" type="button" class="danger-btn">Vider l’affichage</button>
-        </div>
+        <div id="diagnosticSheet"></div>
+
+        <section class="card employee-chat-card hidden" id="assistantChatSection">
+            <h3>Poser une question sur cette session</h3>
+            <p class="section-hint" id="assistantChatHint">L’assistant s’appuie sur la fiche diagnostic. Sans clé API, il répond en mode guidé intelligent.</p>
+            <div id="assistantChatSuggestions" class="chat-suggestions"></div>
+            <div id="assistantChatMessages" class="chat-messages"></div>
+            <div class="chat-input-row">
+                <input id="assistantChatInput" type="text" placeholder="Ex : Pourquoi 0 row sur ce filtre ? Quelle étape est lente ?" />
+                <button type="button" id="assistantChatSendBtn">Envoyer</button>
+            </div>
+        </section>
+
     </section>
 
+    <div class="hidden" data-panel="compare">
+    <section class="card hidden" id="mepCompareSection">
+        <h2>Comparaison</h2>
+        <p class="section-hint">Régression MEP, recherche transversale et comparaison de sessions.</p>
+
+        <h3 class="subsection-title">Régression MEP — comparer deux imports</h3>
+        <div class="log-filter-grid">
+            <div class="field">
+                <label for="compareImportIdA">Import A (avant)</label>
+                <input id="compareImportIdA" type="text" placeholder="Ex: 1" />
+            </div>
+            <div class="field">
+                <label for="compareImportIdB">Import B (après)</label>
+                <input id="compareImportIdB" type="text" placeholder="Ex: 2" />
+            </div>
+        </div>
+        <button id="compareImportsBtn" type="button" class="secondary-btn">Comparer les imports</button>
+        <div id="importCompareResult"></div>
+    </section>
+
+    <section class="card hidden" id="explorerSection">
+        <h3 class="subsection-title">Recherche transversale</h3>
+        <p class="section-hint">Recherchez un UUID, filtre, champ métier ou utilisateur sur plusieurs imports.</p>
+        <div class="log-filter-grid">
+            <div class="field">
+                <label for="crossSearchImportIds" title="Liste ou plage (7-17, 7 à 17)">Import IDs</label>
+                <input id="crossSearchImportIds" type="text" placeholder="Ex: 7-17 (vide = filtre logs)" />
+            </div>
+            <div class="field">
+                <label for="crossSearchType">Type de recherche</label>
+                <select id="crossSearchType">
+                    <option value="UUID">UUID</option>
+                    <option value="FILTER">Code filtre</option>
+                    <option value="USER">Utilisateur</option>
+                    <option value="SESSION">Session ID</option>
+                    <option value="PROCESS">Process</option>
+                    <option value="BUSINESS_FIELD">Champ métier</option>
+                    <option value="MESSAGE">Texte dans le message</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="crossSearchValue">Valeur</label>
+                <input id="crossSearchValue" type="text" placeholder="Ex: TRCEXP_BYAMPE, admin.ad, 1769540103782" />
+            </div>
+            <div class="field" id="crossSearchBusinessFieldWrap">
+                <label for="crossSearchBusinessField">Champ métier</label>
+                <select id="crossSearchBusinessField">
+                    <option value="noUnite">noUnite</option>
+                    <option value="noDUM">noDUM</option>
+                    <option value="amp">amp</option>
+                    <option value="ampe">ampe</option>
+                    <option value="refDemande">refDemande</option>
+                    <option value="refBad">refBad</option>
+                    <option value="codeSecu">codeSecu</option>
+                    <option value="noService">noService</option>
+                </select>
+            </div>
+            <div class="field checkbox-field">
+                <label for="crossSearchErrorsOnly">Erreurs seulement</label>
+                <input id="crossSearchErrorsOnly" type="checkbox" />
+            </div>
+        </div>
+        <div class="actions wrap">
+            <button id="crossSearchBtn" type="button">Lancer la recherche</button>
+            <button id="clearCrossSearchBtn" type="button" class="danger-btn">Vider</button>
+        </div>
+        <div id="crossSearchResult"></div>
+
+        <h3 class="subsection-title">Comparer deux sessions</h3>
+        <p class="section-hint">Comparez deux sessions pour détecter des régressions comportementales.</p>
+        <div class="log-filter-grid">
+            <div class="field">
+                <label for="compareImportIds" title="Liste ou plage (7-17, 7 à 17)">Import IDs</label>
+                <input id="compareImportIds" type="text" placeholder="Ex: 7-17 ou 7,8" />
+            </div>
+            <div class="field">
+                <label for="compareSessionA">Session A (timestamp)</label>
+                <input id="compareSessionA" type="text" placeholder="Ex: 1769540103782" />
+            </div>
+            <div class="field">
+                <label for="compareSessionB">Session B (timestamp)</label>
+                <input id="compareSessionB" type="text" placeholder="Ex: 1769540110000" />
+            </div>
+            <div class="field">
+                <label for="compareProcessFilter">Process (optionnel)</label>
+                <input id="compareProcessFilter" type="text" placeholder="Ex: processRunRules, processFilter" />
+            </div>
+        </div>
+        <div class="actions wrap">
+            <button id="compareSessionsBtn" type="button">Comparer les sessions</button>
+            <button id="clearCompareBtn" type="button" class="danger-btn">Vider comparaison</button>
+        </div>
+        <div id="sessionCompareResult"></div>
+    </section>
+    </div>
+
+    <div class="hidden" data-panel="advanced">
     <section class="card hidden" id="logExplorerSection">
         <h2>Analyse par log</h2>
 
+        <div id="logAnalysisGuidancePanel" class="log-guidance-panel hidden" aria-live="polite">
+            <div class="log-guidance-header">
+                <strong id="logGuidanceTypeLabel">Type de logs</strong>
+                <span id="logGuidanceSummary" class="log-guidance-summary"></span>
+            </div>
+            <p id="logGuidanceDescription" class="section-hint"></p>
+            <div class="log-guidance-suggest">
+                <span class="log-guidance-label">Regroupement suggéré :</span>
+                <strong id="logGuidanceGroupByLabel">—</strong>
+                <button type="button" id="applySuggestedGroupByBtn" class="secondary-btn small-btn">
+                    Appliquer
+                </button>
+            </div>
+            <div class="log-guidance-columns">
+                <div class="log-guidance-block">
+                    <h4>Informations extractibles</h4>
+                    <ul id="logGuidanceExtractableList" class="log-guidance-list"></ul>
+                </div>
+                <div class="log-guidance-block">
+                    <h4>À éviter comme regroupement</h4>
+                    <ul id="logGuidanceAvoidList" class="log-guidance-list log-guidance-avoid"></ul>
+                </div>
+            </div>
+            <ul id="logGuidanceTipsList" class="log-guidance-tips"></ul>
+            <div id="logGuidancePerImport" class="log-guidance-imports hidden"></div>
+        </div>
+
         <div class="log-filter-grid">
             <div class="field">
-                <label for="logFilterImportIds">Import IDs</label>
-                <input id="logFilterImportIds" type="text" placeholder="Ex: 1,2,3" />
+                <label for="logFilterImportIds" title="Liste (7,8,9) ou plage (7-17, 7 à 17)">Import IDs</label>
+                <input id="logFilterImportIds" type="text" placeholder="Ex: 7-17 ou 7 à 17 ou 7,8,9" />
             </div>
 
             <div class="field">
@@ -134,7 +337,7 @@
             <div class="field">
                 <label for="logGroupBy">Regrouper par</label>
                 <select id="logGroupBy">
-                    <option value="sessionId">Session ID</option>
+                    <option value="sessionId">Session technique (timestamp)</option>
                     <option value="userName">Utilisateur</option>
                     <option value="processName">Process Name</option>
                     <option value="eventType">Event Type</option>
@@ -147,13 +350,13 @@
             </div>
 
             <div class="field">
-                <label for="logFilterSessionId">Session ID</label>
+                <label for="logFilterSessionId" title="2ᵉ champ du log pipe WORKS (timestamp)">Session technique</label>
                 <input id="logFilterSessionId" type="text" placeholder="Ex: 1769540103782" />
             </div>
 
             <div class="field">
-                <label for="logFilterUuid">UUID</label>
-                <input id="logFilterUuid" type="text" placeholder="Ex: 3394857502433953076" />
+                <label for="logFilterUuid" title="UUID métier dans le message (uuid [...])">UUID transaction</label>
+                <input id="logFilterUuid" type="text" placeholder="Ex: -5387821228861010765" />
             </div>
 
             <div class="field">
@@ -177,12 +380,9 @@
         </div>
     </section>
 
-    <section class="card hidden" id="v2ResultSection">
-        <h2>Analyse V2 des workflows</h2>
-        <div id="v2Result"></div>
-    </section>
+    <div id="expertResultsDock" class="expert-results-dock" hidden style="display:none!important">
 
-    <section class="card hidden" id="logsResultSection">
+    <section class="card expert-result-panel" id="logsResultSection" hidden>
         <div class="card-header-inline">
             <h2>Logs consultables</h2>
             <div id="logsSummary" class="logs-summary"></div>
@@ -197,7 +397,7 @@
         <div id="logsResult"></div>
     </section>
 
-    <section class="card hidden" id="groupsResultSection">
+    <section class="card expert-result-panel" id="groupsResultSection" hidden>
         <div class="card-header-inline">
             <h2>Groupes de logs</h2>
             <div id="groupsSummary" class="logs-summary"></div>
@@ -205,7 +405,7 @@
         <div id="groupsResult"></div>
     </section>
 
-    <section class="card hidden" id="groupAnalysisSection">
+    <section class="card expert-result-panel" id="groupAnalysisSection" hidden>
         <div class="card-header-inline">
             <h2>Analyse du groupe</h2>
             <button id="clearGroupAnalysisBtn" type="button" class="danger-btn">Vider l’analyse</button>
@@ -213,7 +413,7 @@
         <div id="groupAnalysisResult"></div>
     </section>
 
-    <section class="card hidden" id="workflowGraphSection">
+    <section class="card expert-result-panel" id="workflowGraphSection" hidden>
         <div class="card-header-inline">
             <h2>Graphe relationnel du groupe</h2>
             <button id="clearWorkflowGraphBtn" type="button" class="danger-btn">Vider le graphe</button>
@@ -221,7 +421,7 @@
         <div id="workflowGraphResult"></div>
     </section>
 
-    <section class="card hidden" id="relatedLogsSection">
+    <section class="card expert-result-panel" id="relatedLogsSection" hidden>
         <div class="card-header-inline">
             <h2>Logs liés avec explication</h2>
             <button id="clearRelatedLogsBtn" type="button" class="danger-btn">Vider les logs liés</button>
@@ -229,23 +429,50 @@
         <div id="relatedLogsResult"></div>
     </section>
 
-    <section class="card hidden" id="humanResultSection">
+    <section class="card expert-result-panel" id="humanResultSection" hidden>
         <h2>Explication utilisateur globale</h2>
         <div id="humanResult"></div>
     </section>
 
-    <section class="card hidden" id="analysisResultSection">
+    <section class="card expert-result-panel" id="analysisResultSection" hidden>
         <h2>Résultat brut / technique</h2>
         <pre id="analysisResult"></pre>
     </section>
 
-    <section class="card">
-        <h2>Messages</h2>
-        <div id="messageBox" class="info"></div>
-    </section>
-</div>
+    </div>
 
-<script src="/auth.js"></script>
-<script src="/app.js"></script>
+    </div>
+</div>
+<div id="appModalBackdrop" class="app-modal-backdrop hidden" aria-hidden="true">
+    <div class="app-modal" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+        <h3 id="appModalTitle" class="app-modal-title"></h3>
+        <div id="appModalBody" class="app-modal-body"></div>
+        <div id="appModalActions" class="app-modal-actions"></div>
+    </div>
+</div>
+<div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+(function () {
+    function collapseExpertResults() {
+        var dock = document.getElementById("expertResultsDock");
+        if (dock) {
+            dock.classList.remove("expert-dock-open");
+            dock.hidden = true;
+            dock.style.display = "none";
+        }
+        document.querySelectorAll(".expert-result-panel").forEach(function (el) {
+            el.classList.remove("expert-panel-open");
+            el.hidden = true;
+            el.style.display = "none";
+        });
+    }
+    collapseExpertResults();
+    window.collapseExpertResults = collapseExpertResults;
+})();
+</script>
+<script src="/auth.js?v=20260625"></script>
+<script src="/app.js?v=20260734"></script>
+<script src="/employee-ui.js?v=20260736"></script>
 </body>
 </html>

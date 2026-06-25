@@ -6,6 +6,9 @@ import com.caciopee.loganalyzer.dto.ImportAnalysisSummaryDto;
 import com.caciopee.loganalyzer.dto.IncidentCandidateDto;
 import com.caciopee.loganalyzer.dto.LogEntryViewDto;
 import com.caciopee.loganalyzer.dto.GenericPatternDto;
+import com.caciopee.loganalyzer.dto.LatencyOriginReportDto;
+import com.caciopee.loganalyzer.service.ImportAccessService;
+import com.caciopee.loganalyzer.service.LatencyInvestigationService;
 import com.caciopee.loganalyzer.service.LogAnalysisService;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,9 +20,15 @@ import java.util.List;
 public class AnalysisController {
 
     private final LogAnalysisService logAnalysisService;
+    private final ImportAccessService importAccessService;
+    private final LatencyInvestigationService latencyInvestigationService;
 
-    public AnalysisController(LogAnalysisService logAnalysisService) {
+    public AnalysisController(LogAnalysisService logAnalysisService,
+                              ImportAccessService importAccessService,
+                              LatencyInvestigationService latencyInvestigationService) {
         this.logAnalysisService = logAnalysisService;
+        this.importAccessService = importAccessService;
+        this.latencyInvestigationService = latencyInvestigationService;
     }
 
     @GetMapping("/dashboard")
@@ -29,17 +38,33 @@ public class AnalysisController {
 
     @GetMapping("/import/{importId}/summary")
     public ImportAnalysisSummaryDto getImportSummary(@PathVariable Long importId) {
+        importAccessService.touch(importId);
         return logAnalysisService.getImportSummary(importId);
     }
 
     @GetMapping("/import/{importId}/story")
     public ExecutionStoryDto getImportStory(@PathVariable Long importId) {
+        importAccessService.touch(importId);
         return logAnalysisService.getImportStory(importId);
     }
 
     @GetMapping("/import/{importId}/incidents")
     public List<IncidentCandidateDto> getImportIncidents(@PathVariable Long importId) {
+        importAccessService.touch(importId);
         return logAnalysisService.detectImportIncidents(importId);
+    }
+
+    @GetMapping("/import/{importId}/latency-origin")
+    public LatencyOriginReportDto getLatencyOrigin(
+            @PathVariable Long importId,
+            @RequestParam(required = false) Long evidenceLogId,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(required = false) String uuid,
+            @RequestParam(required = false) String filterCode,
+            @RequestParam(required = false) String processName) {
+        importAccessService.touch(importId);
+        return latencyInvestigationService.investigate(
+                importId, evidenceLogId, sessionId, uuid, filterCode, processName);
     }
 
     @GetMapping("/execution/{sessionId}/story")

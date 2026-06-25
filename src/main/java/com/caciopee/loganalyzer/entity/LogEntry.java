@@ -19,7 +19,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_log_entries_parse_quality", columnList = "parse_quality"),
                 @Index(name = "idx_log_entries_source_file_name", columnList = "source_file_name"),
                 @Index(name = "idx_log_entries_user_name", columnList = "user_name"),
-                @Index(name = "idx_log_entries_process_name", columnList = "process_name")
+                @Index(name = "idx_log_entries_process_name", columnList = "process_name"),
+                @Index(name = "idx_log_entries_duration_ms", columnList = "duration_ms")
         })
 public class LogEntry {
 
@@ -125,6 +126,9 @@ public class LogEntry {
 
     @Column(name = "is_error", nullable = false)
     private Boolean isError = false;
+
+    @Column(name = "duration_ms")
+    private Long durationMs;
 
     @Column(name = "business_meaning", columnDefinition = "TEXT")
     private String businessMeaning;
@@ -415,6 +419,14 @@ public class LogEntry {
 
     public void setIsError(Boolean isError) {
         this.isError = isError;
+    }
+
+    public Long getDurationMs() {
+        return durationMs;
+    }
+
+    public void setDurationMs(Long durationMs) {
+        this.durationMs = durationMs;
     }
 
     public String getBusinessMeaning() {

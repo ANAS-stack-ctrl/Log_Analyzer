@@ -171,11 +171,13 @@ public class LogRelatedLogsServiceImpl implements LogRelatedLogsService {
                         cb.like(msg, "%0] row%")
                 );
 
-                case "PERFORMANCE", "MEMORY" -> cb.or(
+                case "PERFORMANCE", "MEMORY", "PERFORMANCE_ANOMALY" -> cb.or(
                         cb.like(msg, "%memory usage%"),
                         cb.like(msg, "%took%"),
                         cb.like(msg, like)
                 );
+
+                case "MEMORY_ANOMALY" -> cb.like(msg, "%memory usage%");
 
                 default -> cb.or(
                         cb.like(msg, like),

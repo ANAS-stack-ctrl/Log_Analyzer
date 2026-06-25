@@ -10,6 +10,10 @@ public class GraphNodeDto {
     private Long count;
     private String severity;
     private String description;
+    private String parentId;
+    private Integer level;
+    private String familyId;
+    private String familyGroup;
     private List<String> examples = new ArrayList<>();
     private List<GraphOccurrenceDto> occurrences = new ArrayList<>();
 
@@ -60,6 +64,18 @@ public class GraphNodeDto {
     public void setDescription(String description) {
         this.description = description;
     }
+
+    public String getParentId() { return parentId; }
+    public void setParentId(String parentId) { this.parentId = parentId; }
+
+    public Integer getLevel() { return level; }
+    public void setLevel(Integer level) { this.level = level; }
+
+    public String getFamilyId() { return familyId; }
+    public void setFamilyId(String familyId) { this.familyId = familyId; }
+
+    public String getFamilyGroup() { return familyGroup; }
+    public void setFamilyGroup(String familyGroup) { this.familyGroup = familyGroup; }
 
     public List<String> getExamples() {
         return examples;

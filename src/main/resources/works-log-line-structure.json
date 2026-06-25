@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "description": "Structure des lignes logs WORKS (pipe-delimited) — référence pour le parseur et le catalogue.",
+  "lineFormat": "pipe",
+  "separator": "|",
+  "standardFields": [
+    {"index": 0, "name": "logTimestamp", "label": "Horodatage", "example": "2026-04-08 12:42:14,710", "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3}$"},
+    {"index": 1, "name": "executionId", "label": "Session technique", "description": "Identifiant de session WORKS (2e colonne du log, ex. 1775648534705). À utiliser pour Diagnostiquer.", "example": "1775648534705"},
+    {"index": 2, "name": "level", "label": "Niveau", "values": ["DEBUG", "INFO", "WARN", "ERROR"]},
+    {"index": 3, "name": "userName", "label": "Utilisateur", "example": "safouane.ghziel"},
+    {"index": 4, "name": "sourceClass", "label": "Logger / classe source", "examples": ["traceSaveLogger", "worksLogger", "perfLogger", "process"]},
+    {"index": 5, "name": "processName", "label": "Colonne processus L1", "description": "process.*, processFilter-*, processWebService-*, processDocument-*, -0--0-SAVE", "examples": ["processFilter-0-ZRE22-0-LOAD", "process.AMPE Contrôle", "processWebService-0-WS_SAVE_DUM_DOUANE-0-SAVE"]},
+    {"index": "6-8", "name": "reserved", "label": "Réservé (souvent vide)", "description": "Trois champs vides entre processName et message (|||)"},
+    {"index": "message", "name": "message", "label": "Message métier", "description": "Commence en général à l'index 6-9. Peut contenir des pipes internes avant logCode."},
+    {"index": "logCode", "name": "logCode", "label": "Code log numérique", "example": "3781"},
+    {"index": "clientIp", "name": "clientIp", "label": "IP client", "optional": true, "example": "192.168.7.11"},
+    {"index": "environment", "name": "environment", "label": "Datasource", "example": "DS:dataSourceCenter"},
+    {"index": "serverName", "name": "serverName", "label": "Serveur WORKS", "example": "WORKS24-07"},
+    {"index": "appVersion", "name": "appVersion", "label": "Version application", "example": "Works-24.0-2026-02-20_11-07-34-245765"},
+    {"index": "correlationId", "name": "correlationId", "label": "UUID corrélation fichier", "example": "aae3d9d7-4814-403b-a566-8ed91bfcee70"}
+  ],
+  "processColumnPatterns": [
+    {"pattern": "^process\\.", "label": "Processus métier", "familyPrefix": "PROC-"},
+    {"pattern": "^processFilter-\\d+-", "label": "Écran filtre", "familyId": "L1-PF"},
+    {"pattern": "^processWebService-\\d+-", "label": "Web service", "familyId": "L1-PW"},
+    {"pattern": "^processRunRules-\\d+-", "label": "Exécution règles", "familyId": "L1-PRR"},
+    {"pattern": "^processDocument-\\d+-", "label": "Impression document", "familyId": "L1-PDOC"},
+    {"pattern": "^-0--0-SAVE", "label": "Sauvegarde SAVE", "familyId": "PROC-SAVE"}
+  ],
+  "messageStructures": [
+    {"id": "MSG-PIPE-RULES", "label": "Exécution règles (pipe)", "pattern": "running rules|processName|taskName|actionName|…|took [N] ms", "extractable": ["process", "task", "action", "durationMs"]},
+    {"id": "MSG-FIRE-RULES", "label": "Début/fin fire rules", "pattern": "uuid […] START/END fire rules … processName […] taskName […] actionName […]", "extractable": ["uuid", "process", "task", "action"]},
+    {"id": "MSG-FILTER-SEARCH", "label": "Recherche composant", "pattern": "searchComposantByRoot … filter code [CODE] uuid […]", "extractable": ["filter", "uuid", "className", "durationMs", "rowCount"]},
+    {"id": "MSG-FILTER-SQL", "label": "Requête filtre SQL", "pattern": "filter code [CODE] uuid […] Query: select …", "extractable": ["filter", "uuid", "queryParam"]},
+    {"id": "MSG-WS-WORKFLOW", "label": "Workflow web service", "pattern": "------------------- WS_* Start/End … took N(ms)", "extractable": ["task", "filter", "durationMs"]},
+    {"id": "MSG-SAVE-TRACE", "label": "Trace SAVE AMPE", "pattern": "------------- noService :: … / MAJ_Insert_* / CHECK_DATE_CREATION_PROD", "extractable": ["businessKey", "save", "action"]},
+    {"id": "MSG-PRINT-DOC", "label": "Impression CUPS", "pattern": "Document [NAME] - Starting conversion / Printing Result", "extractable": ["object", "action"]},
+    {"id": "MSG-JSON-AMP", "label": "Message JSON scanner", "pattern": "msg == {\"ampScanner\": …}", "extractable": ["object", "businessKey"]},
+    {"id": "MSG-TRIGGER", "label": "Trigger planifié", "pattern": "Trigger_Every N minutes was fired / misfired", "extractable": ["triggerName"]},
+    {"id": "MSG-STACK", "label": "Stack trace", "pattern": "at package.Class.method(File.java:N)", "extractable": ["error"]}
+  ],
+  "logFileTypes": [
+    {"prefix": "works-", "label": "Log applicatif WORKS principal", "catalog": "works-message-families.json"},
+    {"prefix": "saveLoadLogFile-", "label": "Journal save/load et triggers", "catalog": "works-message-families.json"},
+    {"prefix": "process-", "label": "Log processus (même format pipe)", "catalog": "works-message-families.json"},
+    {"prefix": "perfs-", "label": "Performances JVM", "note": "Format proche, familles MET-010 / MET-006"},
+    {"prefix": "memPerfs-", "label": "Mémoire détaillée", "note": "Familles performance"}
+  ]
+}

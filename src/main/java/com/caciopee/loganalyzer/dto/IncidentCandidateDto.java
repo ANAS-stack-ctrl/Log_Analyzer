@@ -14,6 +14,13 @@ public class IncidentCandidateDto {
     private String sessionId;
     private String businessKey;
     private String correlationId;
+    private String userName;
+    private String processName;
+    private String filterCode;
+
+    private Integer logCount;
+    private Integer errorCount;
+    private Long maxDurationMs;
 
     private LocalDateTime firstTimestamp;
     private LocalDateTime lastTimestamp;
@@ -79,6 +86,54 @@ public class IncidentCandidateDto {
 
     public void setCorrelationId(String correlationId) {
         this.correlationId = correlationId;
+    }
+
+    public String getUserName() {
+        return userName;
+    }
+
+    public void setUserName(String userName) {
+        this.userName = userName;
+    }
+
+    public String getProcessName() {
+        return processName;
+    }
+
+    public void setProcessName(String processName) {
+        this.processName = processName;
+    }
+
+    public String getFilterCode() {
+        return filterCode;
+    }
+
+    public void setFilterCode(String filterCode) {
+        this.filterCode = filterCode;
+    }
+
+    public Integer getLogCount() {
+        return logCount;
+    }
+
+    public void setLogCount(Integer logCount) {
+        this.logCount = logCount;
+    }
+
+    public Integer getErrorCount() {
+        return errorCount;
+    }
+
+    public void setErrorCount(Integer errorCount) {
+        this.errorCount = errorCount;
+    }
+
+    public Long getMaxDurationMs() {
+        return maxDurationMs;
+    }
+
+    public void setMaxDurationMs(Long maxDurationMs) {
+        this.maxDurationMs = maxDurationMs;
     }
 
     public LocalDateTime getFirstTimestamp() {

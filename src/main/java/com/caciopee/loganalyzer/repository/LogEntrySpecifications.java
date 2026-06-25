@@ -113,6 +113,74 @@ public final class LogEntrySpecifications {
         };
     }
 
+    public static Specification<LogEntry> messageContains(String text) {
+        return (root, query, cb) -> {
+            if (text == null || text.isBlank()) return null;
+
+            String pattern = "%" + text.trim().toLowerCase() + "%";
+
+            return cb.or(
+                    cb.like(cb.lower(root.get("message")), pattern),
+                    cb.like(cb.lower(root.get("rawLog")), pattern)
+            );
+        };
+    }
+
+    public static Specification<LogEntry> hasBusinessKey(String businessKey) {
+        return (root, query, cb) -> {
+            if (businessKey == null || businessKey.isBlank()) return null;
+            return cb.equal(root.get("businessKey"), businessKey.trim());
+        };
+    }
+
+    public static Specification<LogEntry> businessFieldContains(String fieldName, String fieldValue) {
+        return (root, query, cb) -> {
+            if (fieldName == null || fieldName.isBlank()) return null;
+
+            String field = fieldName.trim().toLowerCase();
+            List<Predicate> predicates = new ArrayList<>();
+
+            if (fieldValue != null && !fieldValue.isBlank()) {
+                String value = fieldValue.trim().toLowerCase();
+                String loose = "%" + field + "%" + value + "%";
+                String bracket = "%" + field + "%[%" + value + "%]%";
+                String equals = "%" + field + "%=%" + value + "%";
+
+                predicates.add(cb.like(cb.lower(root.get("message")), loose));
+                predicates.add(cb.like(cb.lower(root.get("rawLog")), loose));
+                predicates.add(cb.like(cb.lower(root.get("message")), bracket));
+                predicates.add(cb.like(cb.lower(root.get("rawLog")), bracket));
+                predicates.add(cb.like(cb.lower(root.get("message")), equals));
+                predicates.add(cb.like(cb.lower(root.get("rawLog")), equals));
+            } else {
+                String fieldPattern = "%" + field + "%";
+                predicates.add(cb.like(cb.lower(root.get("message")), fieldPattern));
+                predicates.add(cb.like(cb.lower(root.get("rawLog")), fieldPattern));
+            }
+
+            return cb.or(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    public static Specification<LogEntry> filterCodeContains(String filterFragment) {
+        return (root, query, cb) -> {
+            if (filterFragment == null || filterFragment.isBlank()) return null;
+
+            String value = filterFragment.trim().toLowerCase();
+            String inBracket = "%filter code [%" + value + "%]%";
+            String loose = "%" + value + "%";
+
+            return cb.or(
+                    cb.like(cb.lower(root.get("message")), inBracket),
+                    cb.like(cb.lower(root.get("rawLog")), inBracket),
+                    cb.and(
+                            cb.like(cb.lower(root.get("message")), "%filter%"),
+                            cb.like(cb.lower(root.get("message")), loose)
+                    )
+            );
+        };
+    }
+
     public static Specification<LogEntry> hasTimestampBetween(LocalDateTime dateFrom, LocalDateTime dateTo) {
         return (root, query, cb) -> {
             if (dateFrom == null && dateTo == null) return null;

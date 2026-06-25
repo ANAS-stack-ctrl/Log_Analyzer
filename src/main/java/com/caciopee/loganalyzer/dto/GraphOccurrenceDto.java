@@ -6,10 +6,14 @@ public class GraphOccurrenceDto {
     private Long logId;
     private LocalDateTime timestamp;
     private String processName;
+    /** Colonne process brute du log (ex. process.CHANGeAMPE-516557048-StartProcess-0-Start). */
+    private String columnProcessName;
     private String actionName;
     private String filterCode;
     private String businessObject;
     private String messagePreview;
+    /** Texte complet du log (rawLog ou message) pour affichage chronologique. */
+    private String fullMessage;
 
     public Long getLogId() {
         return logId;
@@ -33,6 +37,14 @@ public class GraphOccurrenceDto {
 
     public void setProcessName(String processName) {
         this.processName = processName;
+    }
+
+    public String getColumnProcessName() {
+        return columnProcessName;
+    }
+
+    public void setColumnProcessName(String columnProcessName) {
+        this.columnProcessName = columnProcessName;
     }
 
     public String getActionName() {
@@ -65,5 +77,13 @@ public class GraphOccurrenceDto {
 
     public void setMessagePreview(String messagePreview) {
         this.messagePreview = messagePreview;
+    }
+
+    public String getFullMessage() {
+        return fullMessage;
+    }
+
+    public void setFullMessage(String fullMessage) {
+        this.fullMessage = fullMessage;
     }
 }
