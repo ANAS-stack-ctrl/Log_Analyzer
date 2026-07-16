@@ -2,19 +2,39 @@ package com.caciopee.loganalyzer.repository;
 
 import com.caciopee.loganalyzer.entity.LogEntry;
 import com.caciopee.loganalyzer.entity.LogParseQuality;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSpecificationExecutor<LogEntry> {
 
     List<LogEntry> findByLogImportIdOrderByLogTimestampAscIdAsc(Long importId);
 
+    /** Échantillon paginé — ne jamais charger tout un gros import en mémoire. */
+    List<LogEntry> findByLogImportIdOrderByLogTimestampAscIdAsc(Long importId, Pageable pageable);
+
     List<LogEntry> findByLogImportIdAndIsErrorTrueOrderByLogTimestampAsc(Long importId);
+
+    /**
+     * Candidats latence uniquement (évite de charger tout l'import en mémoire).
+     * Tri durée décroissante ; utiliser avec {@link Pageable} pour plafonner.
+     */
+    @Query("""
+            select e from LogEntry e
+            where e.logImport.id = :importId
+              and e.durationMs is not null
+              and e.durationMs >= :threshold
+            order by e.durationMs desc, e.logTimestamp desc, e.id desc
+            """)
+    List<LogEntry> findSlowByImportId(@Param("importId") Long importId,
+                                      @Param("threshold") long threshold,
+                                      Pageable pageable);
 
     List<LogEntry> findBySessionIdOrderByLogTimestampAsc(String sessionId);
 
@@ -173,14 +193,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
             SELECT COUNT(*)
             FROM log_entries
             WHERE import_id = :importId
-              AND (
-                    duration_ms >= :threshold
-                 OR (duration_ms IS NULL AND (
-                        upper(coalesce(message, '')) LIKE '%TOOK [%'
-                     OR upper(coalesce(message, '')) LIKE '%TOOK %MS%'
-                     OR upper(coalesce(raw_log, '')) LIKE '%TOOK [%'
-                 ))
-              )
+              AND duration_ms >= :threshold
             """, nativeQuery = true)
     long countSlowLogsByImport(@Param("importId") Long importId, @Param("threshold") long threshold);
 
@@ -201,15 +214,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
                    COALESCE(NULLIF(TRIM(source_relative_path), ''), COALESCE(NULLIF(TRIM(source_file_name), ''), '—')) AS source_relative_path,
                    COUNT(*) AS log_count,
                    SUM(CASE WHEN is_error THEN 1 ELSE 0 END) AS error_count,
-                   SUM(CASE
-                         WHEN duration_ms >= 2000 THEN 1
-                         WHEN duration_ms IS NULL AND (
-                              upper(coalesce(message, '')) LIKE '%TOOK [%'
-                           OR upper(coalesce(message, '')) LIKE '%TOOK %MS%'
-                           OR upper(coalesce(raw_log, '')) LIKE '%TOOK [%'
-                         ) THEN 1
-                         ELSE 0
-                       END) AS slow_count,
+                   SUM(CASE WHEN duration_ms >= 2000 THEN 1 ELSE 0 END) AS slow_count,
                    MAX(duration_ms) AS max_duration_ms,
                    MIN(log_timestamp) AS first_ts,
                    MAX(log_timestamp) AS last_ts
@@ -308,4 +313,38 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Long>, JpaSp
             where e.logImport.id = :importId
             """)
     int deleteByImportId(@Param("importId") Long importId);
+
+    /**
+     * Récupère la fenêtre de logs ayant potentiellement causé une latence, dans le
+     * scope de corrélation approprié (uuid &gt; txid &gt; filterCode &gt; sessionId).
+     * Pour la performance sur gros volumes, prévoir les index composites décrits dans
+     * le guide d'intégration (uuid_ts / filter_ts / session_ts).
+     */
+    @Query("""
+            SELECT le FROM LogEntry le
+            WHERE le.logImport.id = :importId
+              AND le.logTimestamp >= :windowStart
+              AND le.logTimestamp <= :anchorTs
+              AND le.id <> :anchorId
+              AND (
+                    (:uuid IS NOT NULL AND le.userCorrelationId = :uuid)
+                 OR (:uuid IS NULL AND :txid IS NOT NULL
+                     AND COALESCE(le.userCorrelationId, '') = :txid)
+                 OR (:uuid IS NULL AND :txid IS NULL AND :filterCode IS NOT NULL
+                     AND COALESCE(le.sourceClass, '') LIKE CONCAT('%', :filterCode, '%'))
+                 OR (:uuid IS NULL AND :txid IS NULL AND :filterCode IS NULL
+                     AND COALESCE(le.sessionId, '') = :sessionId)
+              )
+            ORDER BY le.logTimestamp ASC
+            """)
+    List<LogEntry> findCauseWindow(
+            @Param("importId") Long importId,
+            @Param("anchorId") Long anchorId,
+            @Param("windowStart") LocalDateTime windowStart,
+            @Param("anchorTs") LocalDateTime anchorTs,
+            @Param("uuid") String uuid,
+            @Param("txid") String txid,
+            @Param("filterCode") String filterCode,
+            @Param("sessionId") String sessionId
+    );
 }

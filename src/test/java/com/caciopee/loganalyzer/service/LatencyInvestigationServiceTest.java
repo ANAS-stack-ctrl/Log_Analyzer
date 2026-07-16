@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
@@ -42,7 +43,9 @@ class LatencyInvestigationServiceTest {
         WorksLatencyFactExtractor factExtractor = new WorksLatencyFactExtractor();
         ClientLatencyNarrativeBuilder narrativeBuilder = new ClientLatencyNarrativeBuilder();
         LatencyCauseAnalyzer analyzer = new LatencyCauseAnalyzer(classifier, factExtractor, narrativeBuilder);
-        service = new LatencyInvestigationService(logEntryRepository, extractor, parser, analyzer);
+        com.caciopee.loganalyzer.analysis.latency.LatencyRootCauseClassifier rootCauseClassifier =
+                new com.caciopee.loganalyzer.analysis.latency.LatencyRootCauseClassifier();
+        service = new LatencyInvestigationService(logEntryRepository, extractor, parser, analyzer, rootCauseClassifier);
     }
 
     @Test
@@ -165,8 +168,6 @@ class LatencyInvestigationServiceTest {
         when(logEntryRepository.findById(99L)).thenReturn(Optional.of(weak));
         when(logEntryRepository.findByLogImportIdAndSessionIdOrderByLogTimestampAsc(importId, sessionId))
                 .thenReturn(logs);
-        when(logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId))
-                .thenReturn(logs);
 
         LatencyOriginReportDto report = service.investigate(importId, 99L, sessionId, uuid, filter, "Manifeste");
 
@@ -178,26 +179,82 @@ class LatencyInvestigationServiceTest {
     void investigate_rulesEngineLatency() {
         Long importId = 129L;
         String sessionId = "1781861747049";
-        String filter = "MATCX_ZREAMP";
+        String filter = "AMPEZRE";
 
         List<LogEntry> logs = List.of(
-                log(1L, importId, sessionId, "YACHOU.AYOUB", null,
+                log(1L, importId, sessionId, "YACHOU.AYOUB", 7321L,
+                        "global searchComposantByRoot [multithreading] took [7321] ms|248 row | className ServicePortuaire | filter code [AMPEZRE]"),
+                log(2L, importId, sessionId, "YACHOU.AYOUB", null,
+                        "MAJ_Insert_DynaScreen_AMPE_ZRE for composant"),
+                log(3L, importId, sessionId, "YACHOU.AYOUB", null,
+                        "MAJ_Insert_DynaScreen_AMPE_ZRE for composant"),
+                log(4L, importId, sessionId, "YACHOU.AYOUB", 82104L,
+                        "doAction for - actionName : Rapprocher Tout, - transition : matchall took 82104 ms"),
+                log(5L, importId, sessionId, "YACHOU.AYOUB", 79867L,
                         "running rules|process.MATCX_ZREAMP|Match|matchall|533179467|533179469|in host took [79867] ms"),
-                log(2L, importId, sessionId, "YACHOU.AYOUB", 1826L,
-                        "validateAttributesOperation took [1826] ms"),
-                log(3L, importId, sessionId, "YACHOU.AYOUB", 1826L,
-                        "saveOperations took [1826] ms")
+                log(6L, importId, sessionId, "YACHOU.AYOUB", 1826L,
+                        "total time SAVE for key [ServicePortuaireCont] ; 1826 (ms)")
         );
 
         when(logEntryRepository.findByLogImportIdAndSessionIdOrderByLogTimestampAsc(importId, sessionId))
                 .thenReturn(logs);
 
-        LatencyOriginReportDto report = service.investigate(importId, null, sessionId, null, filter, "MATCX_ZREAMP");
+        LatencyOriginReportDto report = service.investigate(importId, null, sessionId, null, filter, "-0--0-SAVE");
 
         assertEquals("HIGH", report.getAnalysisConfidence());
-        assertTrue(report.getPrimaryCause().toLowerCase().contains("règles"));
-        assertTrue(report.getNarrativeSummary().toLowerCase().contains("règles"));
-        assertEquals(79867L, report.getMaxDurationMs());
+        assertTrue(report.getPrimaryCause().toLowerCase().contains("règles")
+                || report.getPrimaryCause().toLowerCase().contains("maj_insert"), report.getPrimaryCause());
+        assertTrue(report.getNarrativeSummary().contains("Rapprocher Tout"), report.getNarrativeSummary());
+        assertTrue(report.getNarrativeSummary().contains("MATCX_ZREAMP"), report.getNarrativeSummary());
+        assertFalse(report.getNarrativeSummary().contains("-0--0-SAVE"), report.getNarrativeSummary());
+        assertEquals("process.MATCX_ZREAMP", report.getProcessName());
+        assertEquals("Rapprocher Tout", report.getActionName());
+        // doAction (82 s) enveloppe les règles (80 s) : c'est le temps perçu utilisateur.
+        assertTrue(report.getMaxDurationMs() >= 79867L, String.valueOf(report.getMaxDurationMs()));
+        assertTrue(report.getMaxDurationMs() <= 82104L, String.valueOf(report.getMaxDurationMs()));
+    }
+
+    @Test
+    void investigate_transitAnchor_recoversRulesBuriedUnderMajInsertNoise() {
+        Long importId = 130L;
+        String sessionId = "1781861748911";
+        LocalDateTime base = LocalDateTime.of(2026, 6, 19, 10, 34, 0);
+
+        List<LogEntry> logs = new ArrayList<>();
+        logs.add(logAt(1L, importId, sessionId, "YACHOU.AYOUB", 7321L, base,
+                "global searchComposantByRoot [multithreading] took [7321] ms|248 row | filter code [AMPEZRE]"));
+        // >800 lignes MAJ entre les règles et Transit : l'ancien lookback marqueur les ratait.
+        for (int i = 0; i < 900; i++) {
+            logs.add(logAt(10L + i, importId, sessionId, "YACHOU.AYOUB", null,
+                    base.plusSeconds(1 + i / 20),
+                    "MAJ_Insert_DynaScreen_AMPE_ZRE for composant #" + i));
+        }
+        logs.add(logAt(1000L, importId, sessionId, "YACHOU.AYOUB", 64100L,
+                base.plusSeconds(80),
+                "running rules|process.MATCX_ZREAMP|Match|matchall|533179467|533179469|in host took [64100] ms"));
+        logs.add(logAt(1001L, importId, sessionId, "YACHOU.AYOUB", 1700L,
+                base.plusSeconds(82),
+                "total time SAVE for key [ServicePortuaireCont] ; 1700 (ms)"));
+        Long transitId = 1002L;
+        logs.add(logAt(transitId, importId, sessionId, "YACHOU.AYOUB", 84049L,
+                base.plusSeconds(84),
+                "Transit task |process.MATCX_ZREAMP|Match|matchall|533179467|533179469|in host took [84049] ms"));
+
+        when(logEntryRepository.findByLogImportIdAndSessionIdOrderByLogTimestampAsc(importId, sessionId))
+                .thenReturn(logs);
+        when(logEntryRepository.findById(transitId)).thenReturn(Optional.of(logs.get(logs.size() - 1)));
+
+        LatencyOriginReportDto report = service.investigate(
+                importId, transitId, sessionId, null, null, "process.MATCX_ZREAMP");
+
+        assertEquals("RULES_DOMINATED", report.getLatencyFamily(),
+                "Transit ancré + running rules dans la fenêtre temporelle → règles, pas workflow opaque");
+        assertTrue(report.getPrimaryCause().toLowerCase().contains("règle")
+                        || report.getPrimaryCause().toLowerCase().contains("fire"),
+                report.getPrimaryCause());
+        assertFalse(report.getWhyChain() != null && report.getWhyChain().stream()
+                        .anyMatch(w -> w.toLowerCase().contains("ne permettent pas")),
+                String.valueOf(report.getWhyChain()));
     }
 
     @Test
@@ -234,6 +291,12 @@ class LatencyInvestigationServiceTest {
     }
 
     private LogEntry log(Long id, Long importId, String sessionId, String user, Long durationMs, String message) {
+        return logAt(id, importId, sessionId, user, durationMs,
+                LocalDateTime.of(2026, 6, 19, 5, 12, (int) (id % 60)), message);
+    }
+
+    private LogEntry logAt(Long id, Long importId, String sessionId, String user, Long durationMs,
+                           LocalDateTime ts, String message) {
         LogEntry log = new LogEntry();
         LogImport imp = new LogImport();
         ReflectionTestUtils.setField(imp, "id", importId);
@@ -243,7 +306,7 @@ class LatencyInvestigationServiceTest {
         log.setUserName(user);
         log.setDurationMs(durationMs);
         log.setMessage(message);
-        log.setLogTimestamp(LocalDateTime.of(2026, 6, 19, 5, 12, (int) (id % 60)));
+        log.setLogTimestamp(ts);
         return log;
     }
 }

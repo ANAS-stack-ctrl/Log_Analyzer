@@ -94,8 +94,11 @@ public class LogController {
     }
 
     @GetMapping("/import/{importId}")
-    public List<LogEntry> getLogsByImportId(@PathVariable Long importId) {
-        return logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
+    public List<LogEntry> getLogsByImportId(@PathVariable Long importId,
+                                            @RequestParam(defaultValue = "500") int limit) {
+        int safe = Math.max(1, Math.min(limit, 2000));
+        return logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(
+                importId, org.springframework.data.domain.PageRequest.of(0, safe));
     }
 
     @GetMapping("/import/{importId}/errors")

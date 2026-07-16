@@ -50,9 +50,24 @@ public class WorksLatencyTimelineParser {
 
 
 
+    /**
+     * Formats WORKS reconnus (alignés sur {@link LogPatternExtractor}) :
+     * took [N] ms | took N ms | took N(ms) | took (ms) = N
+     */
     private static final Pattern GENERIC_TOOK = Pattern.compile(
 
-            "(.+?)\\s*:?\\s*took\\s*\\[(\\d{1,9})]\\s*ms",
+            "(.*?)\\s*:?\\s*took\\s*(?:\\[(\\d{1,9})]|(\\d{1,9}))\\s*(?:\\(\\s*ms\\s*\\)|ms)"
+
+                    + "|(.*?)\\s*:?\\s*took\\s*\\(\\s*ms\\s*\\)\\s*=\\s*(\\d{1,9})",
+
+            Pattern.CASE_INSENSITIVE);
+
+
+
+    /** Format SAVE : « total time SAVE … ; N(ms) » — absent du took classique. */
+    private static final Pattern TOTAL_SAVE_TIME = Pattern.compile(
+
+            "(total time SAVE[^;]{0,200})\\s*;\\s*(\\d{1,9})\\s*\\(\\s*ms\\s*\\)",
 
             Pattern.CASE_INSENSITIVE);
 
@@ -254,6 +269,16 @@ public class WorksLatencyTimelineParser {
 
 
 
+        if (lower.contains("loadoperationbyid") && lower.contains("took")) {
+            return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.OPERATION_LOAD,
+                    "loadOperationById", resolveDuration(log, ex), rowCount, null));
+        }
+
+        if (lower.contains("loadoperationcontext") && lower.contains("took")) {
+            return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.OPERATION_LOAD,
+                    "loadOperationContext", resolveDuration(log, ex), rowCount, null));
+        }
+
         if (lower.contains("loadlistchilds") && lower.contains("[total]") && lower.contains("took")) {
 
             return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.CHILD_LOAD,
@@ -352,7 +377,35 @@ public class WorksLatencyTimelineParser {
 
         }
 
+        // doAction / règles / Transit : toujours des étapes (durée si took présent).
+        // Ne pas dépendre uniquement de parseGenericTimedStep (casse sur rawLog avec |||).
+        if (lower.contains("doaction")) {
+            // durationMs DB compte même si le texte « took » est tronqué / hors message.
+            Long duration = positiveOrNull(resolveDuration(log, ex));
+            String label = resolveDoActionLabel(msg);
+            return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.BUSINESS_ACTION,
+                    label, duration, rowCount, null));
+        }
 
+        if (lower.contains("running rules") || lower.contains("start fire rules")
+                || lower.contains("end fire rules") || lower.contains("fire rules")) {
+            Long duration = positiveOrNull(resolveDuration(log, ex));
+            String label = lower.contains("start fire rules") ? "START fire rules"
+                    : (lower.contains("end fire rules") ? "END fire rules"
+                    : (lower.contains("running rules") ? "running rules" : "fire rules"));
+            return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.RULES_ENGINE,
+                    label, duration, rowCount, null));
+        }
+
+        if (lower.contains("transit task") || lower.contains("start transit")
+                || lower.contains("persist operation") || lower.contains("jbpm")) {
+            Long duration = positiveOrNull(resolveDuration(log, ex));
+            String label = lower.contains("transit task") ? "Transit task"
+                    : (lower.contains("start transit") ? "Start transit"
+                    : (lower.contains("persist") ? "persist operation" : "JBPM"));
+            return java.util.Optional.of(buildStep(log, ex, LatencyOperationClassifier.WORKFLOW,
+                    label, duration, rowCount, null));
+        }
 
         return java.util.Optional.empty();
 
@@ -366,78 +419,144 @@ public class WorksLatencyTimelineParser {
 
                                                                              Integer rowCount) {
 
-        String payload = extractMessagePayload(msg);
+        String payload = extractTimedPayload(log, msg);
 
+        // 1) Formats took classiques (brackets / N ms / N(ms) / took (ms) = N)
         Matcher matcher = GENERIC_TOOK.matcher(payload);
-
-        if (!matcher.find()) {
-
-            return java.util.Optional.empty();
-
+        String operationRaw = null;
+        Long parsedDuration = null;
+        if (matcher.find()) {
+            operationRaw = firstNonBlank(matcher.group(1), matcher.group(4));
+            parsedDuration = parseLongGroup(matcher, 2, 3, 5);
         }
 
+        // 2) Format SAVE : « total time SAVE … ; N(ms) »
+        if (parsedDuration == null) {
+            Matcher save = TOTAL_SAVE_TIME.matcher(payload);
+            if (save.find()) {
+                operationRaw = save.group(1);
+                parsedDuration = parseLongGroup(save, 2);
+            }
+        }
 
+        if (parsedDuration == null) {
+            // Dernier recours uniquement si le message évoque clairement une durée
+            // (évite de créer une étape pour tout log ayant duration_ms en base).
+            String lowerPayload = payload.toLowerCase(Locale.ROOT);
+            boolean looksTimed = lowerPayload.contains("took")
+                    || lowerPayload.contains("total time save")
+                    || lowerPayload.contains("(ms)");
+            if (!looksTimed) {
+                return java.util.Optional.empty();
+            }
+            long fromDb = resolveDuration(log, ex);
+            if (fromDb < GENERIC_MIN_DURATION_MS) {
+                return java.util.Optional.empty();
+            }
+            operationRaw = shorten(payload, 120);
+            parsedDuration = fromDb;
+        }
 
         long duration = resolveDuration(log, ex);
-
         if (duration <= 0) {
-
-            try {
-
-                duration = Long.parseLong(matcher.group(2).trim());
-
-            } catch (NumberFormatException ignored) {
-
-                return java.util.Optional.empty();
-
-            }
-
+            duration = parsedDuration;
         }
-
-
 
         if (duration < GENERIC_MIN_DURATION_MS) {
-
             return java.util.Optional.empty();
-
         }
 
-
-
-        String operation = normalizeOperationName(matcher.group(1), payload);
-
+        String operation = normalizeOperationName(operationRaw != null ? operationRaw : payload, payload);
         if (operation == null || operation.isBlank() || NOISE_OPERATION.matcher(operation).find()) {
-
             return java.util.Optional.empty();
-
         }
-
-
 
         String stepType = classifier.classify(operation, payload);
-
         if (LatencyOperationClassifier.SEARCH_START.equals(stepType)
-
                 || LatencyOperationClassifier.SQL_QUERY_TEXT.equals(stepType)) {
-
             return java.util.Optional.empty();
-
         }
 
-
-
         return java.util.Optional.of(buildStep(log, ex, stepType, operation, duration, rowCount, null));
+    }
 
+    private static Long parseLongGroup(Matcher matcher, int... groups) {
+        for (int g : groups) {
+            if (g <= matcher.groupCount()) {
+                String v = matcher.group(g);
+                if (v != null && !v.isBlank()) {
+                    try {
+                        return Long.parseLong(v.trim());
+                    } catch (NumberFormatException ignored) {
+                        // try next group
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
     }
 
 
 
+    /**
+     * Extrait le texte utile pour un took générique.
+     * Les lignes WORKS stockent souvent {@code message} = texte métier et {@code rawLog}
+     * avec un suffixe {@code |||env|server…}. Prendre aveuglément l'après-{@code |||}
+     * supprimait le took (doAction / running rules) → timeline vide.
+     */
+    private String extractTimedPayload(LogEntry log, String combined) {
+        String message = log != null ? safe(log.getMessage()).trim() : "";
+        if (!message.isBlank() && message.toLowerCase(Locale.ROOT).contains("took")) {
+            return message;
+        }
+        return extractMessagePayload(combined);
+    }
+
     private String extractMessagePayload(String msg) {
+        if (msg == null || msg.isBlank()) {
+            return "";
+        }
+        String trimmed = msg.trim();
+        int pipeIdx = trimmed.lastIndexOf("|||");
+        if (pipeIdx < 0) {
+            return trimmed;
+        }
+        String after = trimmed.substring(pipeIdx + 3).trim();
+        String before = trimmed.substring(0, pipeIdx).trim();
+        String afterLower = after.toLowerCase(Locale.ROOT);
+        if (afterLower.contains("took")
+                || afterLower.contains("doaction")
+                || afterLower.contains("running rules")
+                || afterLower.contains("fire rules")
+                || afterLower.contains("searchcomposant")
+                || afterLower.contains("preparesearch")) {
+            return after;
+        }
+        if (!before.isBlank()) {
+            return before;
+        }
+        return after;
+    }
 
-        int pipeIdx = msg.lastIndexOf("|||");
-
-        return pipeIdx >= 0 ? msg.substring(pipeIdx + 3).trim() : msg.trim();
-
+    private String resolveDoActionLabel(String msg) {
+        Matcher m = Pattern.compile(
+                "doAction for - actionName\\s*:\\s*([^,]+)",
+                Pattern.CASE_INSENSITIVE).matcher(safe(msg));
+        if (m.find()) {
+            String action = m.group(1).replaceAll("(?i)#icon:[^#]*#", "").trim();
+            if (!action.isBlank()) {
+                return "doAction " + action;
+            }
+        }
+        return "doAction";
     }
 
 
@@ -494,7 +613,17 @@ public class WorksLatencyTimelineParser {
 
         step.setOperationName(operation);
 
-        step.setDurationMs(durationMs != null && durationMs > 0 ? durationMs : null);
+        Long effectiveDuration = durationMs != null && durationMs > 0 ? durationMs : null;
+
+        step.setDurationMs(effectiveDuration);
+
+        if (LatencyPlausibility.isImplausible(effectiveDuration)) {
+
+            step.setSuspect(true);
+
+            step.setSuspectReason(LatencyPlausibility.reason(effectiveDuration));
+
+        }
 
         step.setRowCount(rowCount);
 
@@ -604,11 +733,7 @@ public class WorksLatencyTimelineParser {
 
         for (LatencyTimelineStepDto step : raw) {
 
-            String key = step.getLogId() != null
-
-                    ? "log:" + step.getLogId()
-
-                    : step.getStepType() + "|" + safe(step.getOperationName());
+            String key = dedupeKey(step);
 
             LatencyTimelineStepDto existing = bestByKey.get(key);
 
@@ -642,6 +767,34 @@ public class WorksLatencyTimelineParser {
 
         return ordered;
 
+    }
+
+    /**
+     * Fusionne les doublons SAVE / validate / persist de même durée (souvent 3 lignes
+     * quasi identiques pour le même SAVE ServicePortuaireCont).
+     */
+    private String dedupeKey(LatencyTimelineStepDto step) {
+        if (step.getLogId() != null) {
+            // Même log → même étape ; pour SAVE on regroupe aussi par durée + famille.
+            String op = safe(step.getOperationName()).toLowerCase(Locale.ROOT);
+            if (isSaveFamily(op) && step.getDurationMs() != null) {
+                return "save-family|" + step.getDurationMs();
+            }
+            return "log:" + step.getLogId();
+        }
+        String op = safe(step.getOperationName()).toLowerCase(Locale.ROOT);
+        if (isSaveFamily(op) && step.getDurationMs() != null) {
+            return "save-family|" + step.getDurationMs();
+        }
+        return step.getStepType() + "|" + safe(step.getOperationName())
+                + "|" + (step.getDurationMs() != null ? step.getDurationMs() : 0);
+    }
+
+    private static boolean isSaveFamily(String opLower) {
+        return opLower.contains("total time save")
+                || opLower.contains("saveorupdate")
+                || (opLower.contains("persist") && opLower.contains("operation"))
+                || (opLower.contains("validate") && opLower.contains("save"));
     }
 
 
@@ -704,6 +857,10 @@ public class WorksLatencyTimelineParser {
 
         return parsed != null ? parsed : 0L;
 
+    }
+
+    private static Long positiveOrNull(long durationMs) {
+        return durationMs > 0 ? durationMs : null;
     }
 
 

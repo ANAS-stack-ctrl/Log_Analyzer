@@ -27,6 +27,7 @@ import java.security.MessageDigest;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -37,7 +38,8 @@ public class LogFileIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(LogFileIngestionService.class);
 
-    private static final int BATCH_SIZE = 2000;
+    /** Lots JDBC plus petits → pic mémoire bas (import multi-fichiers sur PC 16 Go). */
+    private static final int BATCH_SIZE = 400;
     private static final int READER_BUFFER_SIZE = 64 * 1024;
     private static final int PROGRESS_LINE_STEP = 10000;
 
@@ -103,6 +105,9 @@ public class LogFileIngestionService {
     private final ImportBackgroundService importBackgroundService;
     private final LogFileIngestionService self;
 
+    /** Sessions d'upload découpé (navigateur envoie 20 fichiers par paquets de ~4). */
+    private final ConcurrentHashMap<String, UploadSession> uploadSessions = new ConcurrentHashMap<>();
+
     public LogFileIngestionService(LogParserService logParserService,
                                    LogImportRepository logImportRepository,
                                    JdbcTemplate jdbcTemplate,
@@ -139,6 +144,124 @@ public class LogFileIngestionService {
         }
 
         return List.of(ingestMultipleAsOneImport(list));
+    }
+
+    /**
+     * Démarre une session d'upload découpé : le navigateur envoie les fichiers
+     * par petits paquets HTTP, puis {@link #commitUploadSession(String)} lance
+     * un seul import — évite le pic mémoire d'un multipart géant.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public UploadSessionDto startUploadSession() throws IOException {
+        String sessionId = UUID.randomUUID().toString().replace("-", "");
+        Path dir = Files.createTempDirectory("loganalyzer-session-" + sessionId + "-");
+        uploadSessions.put(sessionId, new UploadSession(dir));
+        return new UploadSessionDto(sessionId, 0);
+    }
+
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public UploadSessionDto addFilesToUploadSession(String sessionId, MultipartFile[] files) throws IOException {
+        UploadSession session = requireSession(sessionId);
+        List<MultipartFile> list = Arrays.stream(files == null ? new MultipartFile[0] : files)
+                .filter(Objects::nonNull)
+                .filter(f -> !f.isEmpty())
+                .toList();
+        if (list.isEmpty()) {
+            return new UploadSessionDto(sessionId, session.files.size());
+        }
+        for (MultipartFile file : list) {
+            String uploadedName = safeName(file);
+            if (!isSupportedLogFile(uploadedName)) {
+                throw new IllegalArgumentException(
+                        "Format non supporté : " + uploadedName + ". Formats : .log, .txt, .out");
+            }
+            String uniqueName = uniqueFileName(session.dir, sanitizeFileName(uploadedName));
+            Path target = session.dir.resolve(uniqueName).normalize();
+            if (!target.startsWith(session.dir.normalize())) {
+                throw new IOException("Nom de fichier invalide : " + uploadedName);
+            }
+            file.transferTo(target);
+            String relative = file.getOriginalFilename();
+            if (relative == null || relative.isBlank()) {
+                relative = uploadedName;
+            }
+            relative = relative.replace("\\", "/");
+            session.files.add(new FileToImport(target, uploadedName, relative));
+            session.totalSize += Math.max(0L, file.getSize());
+        }
+        return new UploadSessionDto(sessionId, session.files.size());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRED)
+    public UploadResult commitUploadSession(String sessionId) {
+        UploadSession session = uploadSessions.remove(sessionId);
+        if (session == null) {
+            return new UploadResult(null, "session", false, "Session d'upload introuvable ou déjà terminée.");
+        }
+        if (session.files.isEmpty()) {
+            deleteDirectoryQuietly(session.dir);
+            return new UploadResult(null, "session", false, "Aucun fichier reçu dans la session.");
+        }
+        try {
+            List<FileToImport> filesToImport = new ArrayList<>(session.files);
+            filesToImport.sort(Comparator.comparing(FileToImport::relativePath));
+            String displayName = "lot-" + filesToImport.size() + "-fichiers";
+            String fileHash = computeAggregateHash(filesToImport);
+            final Path cleanupDir = session.dir;
+            return runImportJob(
+                    displayName,
+                    displayName,
+                    session.totalSize,
+                    fileHash,
+                    filesToImport,
+                    "Session upload découpé",
+                    () -> deleteDirectoryQuietly(cleanupDir)
+            );
+        } catch (Exception e) {
+            log.error("Erreur commit session upload {}", sessionId, e);
+            deleteDirectoryQuietly(session.dir);
+            return new UploadResult(null, "session", false, "Erreur: " + e.getMessage());
+        }
+    }
+
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public void abortUploadSession(String sessionId) {
+        UploadSession session = uploadSessions.remove(sessionId);
+        if (session != null) {
+            deleteDirectoryQuietly(session.dir);
+        }
+    }
+
+    private UploadSession requireSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId requis.");
+        }
+        UploadSession session = uploadSessions.get(sessionId);
+        if (session == null) {
+            throw new IllegalArgumentException("Session d'upload introuvable : " + sessionId);
+        }
+        return session;
+    }
+
+    private static String uniqueFileName(Path dir, String baseName) {
+        Path candidate = dir.resolve(baseName);
+        if (!Files.exists(candidate)) {
+            return baseName;
+        }
+        String stem = baseName;
+        String ext = "";
+        int dot = baseName.lastIndexOf('.');
+        if (dot > 0) {
+            stem = baseName.substring(0, dot);
+            ext = baseName.substring(dot);
+        }
+        for (int i = 2; i < 10_000; i++) {
+            String name = stem + "-" + i + ext;
+            if (!Files.exists(dir.resolve(name))) {
+                return name;
+            }
+        }
+        return stem + "-" + UUID.randomUUID() + ext;
     }
 
     public UploadResult ingestFromDirectory(String directoryPath, boolean recursive) {
@@ -671,7 +794,7 @@ public class LogFileIngestionService {
                         }
 
                         if (batch.size() >= BATCH_SIZE) {
-                            counters.insertedRows += insertBatch(batch);
+                            counters.insertedRows += flushBatchSafely(batch, counters);
                             batch.clear();
                         }
 
@@ -696,11 +819,40 @@ public class LogFileIngestionService {
         }
 
         if (!batch.isEmpty()) {
-            counters.insertedRows += insertBatch(batch);
+            counters.insertedRows += flushBatchSafely(batch, counters);
             batch.clear();
         }
 
         return counters;
+    }
+
+    /**
+     * Insère un lot dans une transaction séparée : si une ligne échoue, l'import
+     * principal n'est pas avorté (évite le blocage "transaction is aborted").
+     */
+    private int flushBatchSafely(List<LogEntryRow> batch, ImportCounters counters) {
+        if (batch.isEmpty()) return 0;
+        List<LogEntryRow> copy = new ArrayList<>(batch);
+        try {
+            return self.insertBatchInNewTx(copy);
+        } catch (Exception e) {
+            log.warn("Échec lot ({} lignes), repli ligne-à-ligne : {}", copy.size(), e.getMessage());
+            int ok = 0;
+            for (LogEntryRow row : copy) {
+                try {
+                    ok += self.insertBatchInNewTx(List.of(row));
+                } catch (Exception rowEx) {
+                    counters.failed++;
+                    log.warn("Ligne lot ignorée importId={} reason={}", row.importId(), rowEx.getMessage());
+                }
+            }
+            return ok;
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int insertBatchInNewTx(List<LogEntryRow> batch) {
+        return insertBatch(batch);
     }
 
     private List<FileToImport> unzipLogFiles(Path zipPath, Path destinationDir) throws IOException {
@@ -881,40 +1033,40 @@ public class LogFileIngestionService {
 
         return new LogEntryRow(
                 importId,
-                sourceFileName,
-                sourceRelativePath,
+                clip(sourceFileName, 500),
+                clip(sourceRelativePath, 1000),
                 parsed.getLogTimestamp(),
-                parsed.getExecutionId(),
-                parsed.getLevel(),
-                parsed.getUserName(),
-                parsed.getSourceClass(),
-                parsed.getProcessName(),
-                parsed.getProcessName(),
+                clip(parsed.getExecutionId(), 255),
+                clip(parsed.getLevel(), 20),
+                clip(parsed.getUserName(), 255),
+                clip(parsed.getSourceClass(), 500),
+                clip(parsed.getProcessName(), 500),
+                clip(parsed.getProcessName(), 500), // step_code (stocke le process WORKS)
                 parsed.getLogCode(),
-                parsed.getEnvironment(),
-                parsed.getServerName(),
-                parsed.getAppVersion(),
-                parsed.getCorrelationId(),
+                clip(parsed.getEnvironment(), 255),
+                clip(parsed.getServerName(), 255),
+                clip(parsed.getAppVersion(), 255),
+                clip(parsed.getCorrelationId(), 255),
                 parsed.getMessage(),
                 parsed.getRawLog(),
-                parsed.getEventType(),
-                parsed.getFieldName(),
-                parsed.getInterfaceField(),
-                parsed.getFieldClassCode(),
-                parsed.getParsedType(),
+                clip(parsed.getEventType(), 255),
+                clip(parsed.getFieldName(), 255),
+                clip(parsed.getInterfaceField(), 255),
+                clip(parsed.getFieldClassCode(), 255),
+                clip(parsed.getParsedType(), 255),
                 parsed.getParsedValue(),
-                parsed.getRelationName(),
-                parsed.getRelationKey(),
-                parsed.getBusinessKey(),
-                parsed.getMandatoryField(),
-                parsed.getErrorColumn(),
-                parsed.getErrorAttribute(),
+                clip(parsed.getRelationName(), 255),
+                clip(parsed.getRelationKey(), 255),
+                clip(parsed.getBusinessKey(), 255),
+                clip(parsed.getMandatoryField(), 255),
+                clip(parsed.getErrorColumn(), 255),
+                clip(parsed.getErrorAttribute(), 255),
                 parsed.getErrorValue(),
-                parsed.getErrorBusinessKey(),
+                clip(parsed.getErrorBusinessKey(), 255),
                 Boolean.TRUE.equals(parsed.getError()),
                 durationMs,
                 parsed.getBusinessMeaning(),
-                parsed.getParseQuality() != null ? parsed.getParseQuality().name() : null,
+                clip(parsed.getParseQuality() != null ? parsed.getParseQuality().name() : null, 50),
                 parsed.isAmbiguousMessage(),
                 parsed.isIncomplete(),
                 LocalDateTime.now(),
@@ -922,6 +1074,13 @@ public class LogFileIngestionService {
                 parsed.getMessageTail(),
                 parsed.getTechnicalId()
         );
+    }
+
+    /** Tronque pour respecter les colonnes VARCHAR et éviter d'avorter toute la transaction. */
+    private static String clip(String value, int max) {
+        if (value == null) return null;
+        if (value.length() <= max) return value;
+        return value.substring(0, max);
     }
 
     private String buildSummary(int totalFiles,
@@ -1045,6 +1204,18 @@ public class LogFileIngestionService {
     public record UploadResult(Long importId, String fileName, boolean success, String message, boolean processing) {
         public UploadResult(Long importId, String fileName, boolean success, String message) {
             this(importId, fileName, success, message, false);
+        }
+    }
+
+    public record UploadSessionDto(String sessionId, int fileCount) {}
+
+    private static final class UploadSession {
+        private final Path dir;
+        private final List<FileToImport> files = Collections.synchronizedList(new ArrayList<>());
+        private long totalSize;
+
+        private UploadSession(Path dir) {
+            this.dir = dir;
         }
     }
 

@@ -20,6 +20,9 @@ public class LogQueryServiceImpl implements LogQueryService {
     private static final Pattern UUID_PATTERN =
             Pattern.compile("\\buuid\\s*\\[([^]]+)]", Pattern.CASE_INSENSITIVE);
 
+    private static final Pattern LEADING_BRACKET_UUID_PATTERN =
+            Pattern.compile("(?:^|\\|)\\s*\\[(-?\\d{10,20})\\]\\s+(?=[A-Za-z_])");
+
     private final LogEntryRepository logEntryRepository;
 
     public LogQueryServiceImpl(LogEntryRepository logEntryRepository) {
@@ -161,12 +164,20 @@ public class LogQueryServiceImpl implements LogQueryService {
             if (matcher.find()) {
                 return matcher.group(1);
             }
+            Matcher leading = LEADING_BRACKET_UUID_PATTERN.matcher(log.getMessage());
+            if (leading.find()) {
+                return leading.group(1);
+            }
         }
 
         if (log.getRawLog() != null) {
             Matcher matcher = UUID_PATTERN.matcher(log.getRawLog());
             if (matcher.find()) {
                 return matcher.group(1);
+            }
+            Matcher leading = LEADING_BRACKET_UUID_PATTERN.matcher(log.getRawLog());
+            if (leading.find()) {
+                return leading.group(1);
             }
         }
 

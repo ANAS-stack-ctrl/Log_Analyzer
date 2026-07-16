@@ -29,6 +29,29 @@ public class LogIngestionController {
         return logFileIngestionService.ingestFiles(files);
     }
 
+    /** Upload découpé mémoire-safe : start → files (×N) → commit = 1 seul import. */
+    @PostMapping("/session/start")
+    public LogFileIngestionService.UploadSessionDto startUploadSession() throws Exception {
+        return logFileIngestionService.startUploadSession();
+    }
+
+    @PostMapping(value = "/session/{sessionId}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public LogFileIngestionService.UploadSessionDto addSessionFiles(
+            @PathVariable String sessionId,
+            @RequestParam("files") MultipartFile[] files) throws Exception {
+        return logFileIngestionService.addFilesToUploadSession(sessionId, files);
+    }
+
+    @PostMapping("/session/{sessionId}/commit")
+    public LogFileIngestionService.UploadResult commitUploadSession(@PathVariable String sessionId) {
+        return logFileIngestionService.commitUploadSession(sessionId);
+    }
+
+    @DeleteMapping("/session/{sessionId}")
+    public void abortUploadSession(@PathVariable String sessionId) {
+        logFileIngestionService.abortUploadSession(sessionId);
+    }
+
     @PostMapping("/local-folder")
     @Profile("dev")
     public LogFileIngestionService.UploadResult ingestLocalFolder(@RequestBody LocalFolderIngestRequestDto request) {

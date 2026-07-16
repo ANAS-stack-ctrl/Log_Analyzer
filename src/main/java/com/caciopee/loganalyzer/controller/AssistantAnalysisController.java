@@ -30,6 +30,11 @@ import com.caciopee.loganalyzer.dto.LatencyOriginRequestDto;
 import com.caciopee.loganalyzer.service.GraphLogSearchService;
 import com.caciopee.loganalyzer.service.ImportAccessService;
 import com.caciopee.loganalyzer.service.LatencyInvestigationService;
+import com.caciopee.loganalyzer.dto.CumulativeLogFilterRequestDto;
+import com.caciopee.loganalyzer.dto.CumulativeLogFilterResponseDto;
+import com.caciopee.loganalyzer.service.CumulativeLogFilterService;
+import com.caciopee.loganalyzer.dto.LatencyExplanationResponseDto;
+import com.caciopee.loganalyzer.service.LatencyLlmExplanationService;
 
 @RestController
 @RequestMapping("/assistant")
@@ -46,6 +51,8 @@ public class AssistantAnalysisController {
     private final GraphLogSearchService graphLogSearchService;
     private final LatencyInvestigationService latencyInvestigationService;
     private final ImportAccessService importAccessService;
+    private final CumulativeLogFilterService cumulativeLogFilterService;
+    private final LatencyLlmExplanationService latencyLlmExplanationService;
 
     public AssistantAnalysisController(LogGroupAnalysisService logGroupAnalysisService,
                                        LogRelatedLogsService logRelatedLogsService,
@@ -57,7 +64,9 @@ public class AssistantAnalysisController {
                                        AssistantUserTopSessionsService assistantUserTopSessionsService,
                                        GraphLogSearchService graphLogSearchService,
                                        LatencyInvestigationService latencyInvestigationService,
-                                       ImportAccessService importAccessService) {
+                                       ImportAccessService importAccessService,
+                                       CumulativeLogFilterService cumulativeLogFilterService,
+                                       LatencyLlmExplanationService latencyLlmExplanationService) {
         this.logGroupAnalysisService = logGroupAnalysisService;
         this.logRelatedLogsService = logRelatedLogsService;
         this.aiContextBuilderService = aiContextBuilderService;
@@ -69,6 +78,8 @@ public class AssistantAnalysisController {
         this.graphLogSearchService = graphLogSearchService;
         this.latencyInvestigationService = latencyInvestigationService;
         this.importAccessService = importAccessService;
+        this.cumulativeLogFilterService = cumulativeLogFilterService;
+        this.latencyLlmExplanationService = latencyLlmExplanationService;
     }
 
     @PostMapping("/analyze-group")
@@ -107,6 +118,20 @@ public class AssistantAnalysisController {
                 request.getFilterCode(),
                 request.getProcessName()
         );
+    }
+
+    @PostMapping("/latency-explanation")
+    public LatencyExplanationResponseDto latencyExplanation(@RequestBody LatencyOriginReportDto report) {
+        return latencyLlmExplanationService.explain(report);
+    }
+
+    @PostMapping("/cumulative-logs")
+    public CumulativeLogFilterResponseDto cumulativeLogs(@RequestBody CumulativeLogFilterRequestDto request) {
+        if (request == null || request.getImportId() == null) {
+            throw new IllegalArgumentException("importId requis.");
+        }
+        importAccessService.touch(request.getImportId());
+        return cumulativeLogFilterService.filter(request);
     }
 
     @PostMapping("/session-diagnostic")

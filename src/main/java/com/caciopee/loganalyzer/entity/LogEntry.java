@@ -43,7 +43,7 @@ public class LogEntry {
     @Column(name = "log_timestamp")
     private LocalDateTime logTimestamp;
 
-    @Column(name = "session_id", length = 100)
+    @Column(name = "session_id", length = 255)
     private String sessionId;
 
     @Column(name = "level", length = 20)
@@ -58,22 +58,22 @@ public class LogEntry {
     @Column(name = "process_name", length = 500)
     private String processName;
 
-    @Column(name = "step_code", length = 100)
+    @Column(name = "step_code", length = 500)
     private String stepCode;
 
     @Column(name = "log_code")
     private Integer logCode;
 
-    @Column(name = "environment", length = 100)
+    @Column(name = "environment", length = 255)
     private String environment;
 
-    @Column(name = "server_name", length = 100)
+    @Column(name = "server_name", length = 255)
     private String serverName;
 
     @Column(name = "app_version", length = 255)
     private String appVersion;
 
-    @Column(name = "user_correlation_id", length = 100)
+    @Column(name = "user_correlation_id", length = 255)
     private String userCorrelationId;
 
     @Column(name = "message", columnDefinition = "TEXT")
@@ -82,7 +82,7 @@ public class LogEntry {
     @Column(name = "raw_log", columnDefinition = "TEXT")
     private String rawLog;
 
-    @Column(name = "event_type", length = 100)
+    @Column(name = "event_type", length = 255)
     private String eventType;
 
     @Column(name = "field_name", length = 255)
@@ -94,7 +94,7 @@ public class LogEntry {
     @Column(name = "field_class_code", length = 255)
     private String fieldClassCode;
 
-    @Column(name = "parsed_type", length = 100)
+    @Column(name = "parsed_type", length = 255)
     private String parsedType;
 
     @Column(name = "parsed_value", columnDefinition = "TEXT")

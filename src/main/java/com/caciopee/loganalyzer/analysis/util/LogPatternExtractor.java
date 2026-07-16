@@ -15,6 +15,13 @@ public class LogPatternExtractor {
     private static final Pattern UUID_PATTERN =
             Pattern.compile("\\buuid\\s*\\[\\s*([^\\]]+?)\\s*]", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Forme WORKS sans mot-clé : {@code [3541956776772717142] doAction for ...}
+     * (uuid numérique long en tête de message, distinct des {@code took [N] ms}).
+     */
+    private static final Pattern LEADING_BRACKET_UUID_PATTERN =
+            Pattern.compile("(?:^|\\|)\\s*\\[(-?\\d{10,20})\\]\\s+(?=[A-Za-z_])");
+
     private static final Pattern TRANSACTION_PATTERN =
             Pattern.compile("transactionId\\s*[\\[(]\\s*([^\\])]+?)\\s*[\\])]", Pattern.CASE_INSENSITIVE);
 
@@ -165,7 +172,7 @@ public class LogPatternExtractor {
         String rawLog = safe(log != null ? log.getRawLog() : null);
         String all = message + " " + rawLog + " " + processColumn;
 
-        ctx.setExtractedUuid(extractFirst(UUID_PATTERN, all));
+        ctx.setExtractedUuid(extractUuid(message, rawLog, all));
         ctx.setExtractedTransactionId(extractFirst(TRANSACTION_PATTERN, all));
         ctx.setExtractedFilterCode(extractFirst(FILTER_CODE_PATTERN, all));
         if (ctx.getExtractedFilterCode() == null) {
@@ -1235,6 +1242,25 @@ public class LogPatternExtractor {
 
     private boolean isNumericOnly(String value) {
         return value != null && value.matches("\\d+");
+    }
+
+    /**
+     * UUID WORKS : forme {@code uuid […]} prioritaire, sinon {@code [digits] doAction…} en tête.
+     */
+    public String extractUuid(String message, String rawLog) {
+        return extractUuid(safe(message), safe(rawLog), safe(message) + " " + safe(rawLog));
+    }
+
+    private String extractUuid(String message, String rawLog, String all) {
+        String labeled = extractFirst(UUID_PATTERN, all);
+        if (labeled != null) {
+            return labeled;
+        }
+        String leading = extractFirst(LEADING_BRACKET_UUID_PATTERN, message);
+        if (leading != null) {
+            return leading;
+        }
+        return extractFirst(LEADING_BRACKET_UUID_PATTERN, rawLog);
     }
 
     private String extractFirst(Pattern pattern, String text) {

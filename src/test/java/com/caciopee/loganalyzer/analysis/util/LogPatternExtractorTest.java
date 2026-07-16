@@ -99,6 +99,27 @@ class LogPatternExtractorTest {
         assertEquals("SUPERVISION ORDRE TRACTION", ex.getProcess());
         assertEquals("Start", ex.getAction());
         assertEquals(123L, ex.getDurationMs());
+        assertEquals("813999418177701037", ex.getUuid(),
+                "uuid leading [digits] avant doAction doit être extrait");
+    }
+
+    @Test
+    void extractGraph_leadingBracketUuid_doActionRapprocherTout() {
+        LogEntry log = entry(
+                "process.MATCX_ZREAMP",
+                "[3541956776772717142] doAction for - actionName : Rapprocher Tout, - transition : matchall took 84107 ms"
+        );
+
+        GraphExtraction ex = extractor.extractGraph(log);
+
+        assertEquals("3541956776772717142", ex.getUuid());
+        assertEquals("Rapprocher Tout", ex.getAction());
+    }
+
+    @Test
+    void extractUuid_prefersLabeledUuidOverLeadingBracket() {
+        String message = "[1111111111111111111] doAction for - actionName : X took 1 ms uuid [2222222222222222222]";
+        assertEquals("2222222222222222222", extractor.extractUuid(message, null));
     }
 
     @Test

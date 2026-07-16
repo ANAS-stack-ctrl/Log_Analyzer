@@ -171,11 +171,17 @@ public class CrossSearchServiceImpl implements CrossSearchService {
     }
 
     private String extractUuid(LogEntry log) {
-        if (log.getMessage() != null) {
+        String fromPattern = logPatternExtractor.extractUuid(
+                log != null ? log.getMessage() : null,
+                log != null ? log.getRawLog() : null);
+        if (fromPattern != null && !fromPattern.isBlank()) {
+            return fromPattern;
+        }
+        if (log != null && log.getMessage() != null) {
             Matcher m = UUID_PATTERN.matcher(log.getMessage());
             if (m.find()) return m.group(1);
         }
-        return log.getBusinessKey();
+        return log != null ? log.getBusinessKey() : null;
     }
 
     private int normalizeLimit(Integer limit) {

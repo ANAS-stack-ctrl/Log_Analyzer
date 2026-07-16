@@ -66,10 +66,16 @@ function initEmployeeUX() {
     bindDelegatedAction("assistantChatSendBtn", sendAssistantChatMessage);
     bindDelegatedAction("assistantGuidedReportBtn", (e) => loadAssistantFullAnalysis(e, true));
     bindDelegatedAction("assistantFullAnalysisBtn", loadAssistantFullAnalysis);
+    bindDelegatedAction("ragIndexBtn", () => startRagIndexing(false));
+    bindDelegatedAction("ragReindexBtn", () => startRagIndexing(true));
+    bindDelegatedAction("ragAskBtn", askRagQuestion);
 
     document.getElementById("scenarioPresetSelect")?.addEventListener("change", applyScenarioPreset);
     document.getElementById("assistantChatInput")?.addEventListener("keydown", (e) => {
         if (e.key === "Enter") sendAssistantChatMessage(e);
+    });
+    document.getElementById("ragAskInput")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") askRagQuestion(e);
     });
 }
 
@@ -931,15 +937,21 @@ function renderLatencyTimelineSteps(steps) {
                     </tr>
                 </thead>
                 <tbody>
-                    ${list.map(step => `
-                        <tr class="${step.bottleneck ? "latency-bottleneck-row" : ""}">
-                            <td>${escapeHtml(step.operationName || step.stepType || "")}</td>
+                    ${list.map(step => {
+                        const ms = Number(step.durationMs) || 0;
+                        const navTerm = ms > 0 ? `took [${ms}]` : (step.operationName || "");
+                        const navAttr = navTerm
+                            ? `class="latency-step-row is-navable ${step.bottleneck ? "latency-bottleneck-row" : ""} ${step.suspect ? "latency-suspect-row" : ""}" data-latency-nav="${escapeHtml(navTerm)}" title="Cliquez pour voir cette étape dans les logs."`
+                            : `class="${step.bottleneck ? "latency-bottleneck-row" : ""} ${step.suspect ? "latency-suspect-row" : ""}"`;
+                        return `
+                        <tr ${navAttr} ${step.suspect ? `data-suspect-reason="${escapeHtml(step.suspectReason || "")}"` : ""}>
+                            <td>${escapeHtml(step.operationName || step.stepType || "")}${step.suspect ? ' <span class="latency-suspect-tag">⚠ mesure douteuse</span>' : ""}${step.logId != null ? ` <span class="latency-evidence-meta">#${escapeHtml(String(step.logId))}</span>` : ""}</td>
                             <td><strong>${escapeHtml(formatLatencyDurationMs(step.durationMs))}</strong></td>
                             <td>${step.rowCount != null ? escapeHtml(step.rowCount) : "—"}</td>
                             <td>${step.memoryMo != null ? escapeHtml(step.memoryMo) + " Mo" : "—"}</td>
                             <td class="latency-step-detail">${escapeHtml(step.threadInfo || step.detail || "")}</td>
-                        </tr>
-                    `).join("")}
+                        </tr>`;
+                    }).join("")}
                 </tbody>
             </table>
         </div>
@@ -957,59 +969,823 @@ function getLatencyOriginPanel() {
         || document.getElementById("latencyOriginPanelImport");
 }
 
+function latencySeverity(ms) {
+    const n = Number(ms) || 0;
+    if (n >= 20000) return { level: "critique", label: "Lenteur critique", icon: "🔴" };
+    if (n >= 8000) return { level: "elevee", label: "Lenteur élevée", icon: "🟠" };
+    return { level: "notable", label: "Lenteur notable", icon: "🟡" };
+}
+
+function friendlyConfidence(conf) {
+    switch (String(conf || "").toUpperCase()) {
+        case "HIGH": return "élevée";
+        case "MEDIUM": return "moyenne";
+        case "LOW": return "faible";
+        default: return "—";
+    }
+}
+
+function cleanProcessLabel(p) {
+    if (!p) return "n/a";
+    let s = String(p).trim();
+    if (s.startsWith("process.")) s = s.slice("process.".length);
+    return s || "n/a";
+}
+
+function latencyNaValue(v) {
+    const s = (v == null ? "" : String(v)).trim();
+    return s ? s : "n/a";
+}
+
+const LATENCY_STEP_LABELS = {
+    ROOT_QUERY: "Requête principale (base de données)",
+    GLOBAL_SEARCH: "Recherche globale",
+    PARTITIONAL_SEARCH: "Recherche partitionnée",
+    LOAD_CHILDREN_TOTAL: "Chargement des détails",
+    SEARCH_ATTRIBUTES: "Chargement des attributs",
+    LOAD_CHILDREN_B2: "Chargement complémentaire",
+    RENDERING: "Affichage à l'écran",
+    RULES_ENGINE: "Règles métier",
+    SAVE_PERSIST: "Sauvegarde",
+    VALIDATION: "Validation",
+    WEBSERVICE: "Webservice",
+    PRINT: "Impression / PDF",
+    AUTOSTART: "AutoStart",
+    WORKFLOW: "Workflow / BPM",
+    BUSINESS_ACTION: "Action métier"
+};
+
+function friendlyStepLabel(step) {
+    return LATENCY_STEP_LABELS[step.stepType] || step.operationName || step.stepType || "Étape";
+}
+
+const LATENCY_FIELD_HELP = {
+    screen: "L'écran / formulaire métier concerné par l'opération.",
+    filter: "Le filtre ou la règle métier exécuté(e) — souvent l'origine d'une requête SQL lourde.",
+    action: "L'action déclenchée par l'utilisateur (ex. Valider, Rechercher).",
+    process: "Le processus métier (workflow) auquel appartient l'opération.",
+    user: "L'utilisateur qui a déclenché l'opération.",
+    session: "Identifiant de session — isole l'activité de cet utilisateur.",
+    uuid: "Identifiant technique WORKS de l'opération (uuid […] ou [N] doAction…). Filtre les logs de cette exécution.",
+    object: "L'objet métier / entité (className) manipulé par la requête (ex. DChargementCont)."
+};
+
+const LATENCY_CRUMB_TYPE_LABELS = {
+    USER: "Utilisateur", SESSION: "Session", PROCESS: "Processus", FILTER: "Filtre",
+    ACTION: "Action", OBJECT: "Objet", UUID: "UUID", SCREEN: "Écran"
+};
+
+function crumbTypeLabel(type) {
+    return LATENCY_CRUMB_TYPE_LABELS[type] || type;
+}
+
+function renderLatencyTriggerGrid(report) {
+    const fields = [
+        { key: "Utilisateur", value: latencyNaValue(report.userName), term: report.userName, navType: "USER", help: LATENCY_FIELD_HELP.user },
+        { key: "Processus", value: cleanProcessLabel(report.processName), term: report.processName, navType: "PROCESS", help: LATENCY_FIELD_HELP.process },
+        { key: "UUID", value: latencyNaValue(report.uuid), term: report.uuid, navType: "UUID", help: LATENCY_FIELD_HELP.uuid },
+        { key: "Action", value: latencyNaValue(report.actionName), term: report.actionName, navType: "ACTION", help: LATENCY_FIELD_HELP.action },
+        { key: "Filtre", value: latencyNaValue(report.filterCode), term: report.filterCode, navType: "FILTER", help: LATENCY_FIELD_HELP.filter },
+        { key: "Session", value: latencyNaValue(report.sessionId), term: report.sessionId, navType: "SESSION", help: LATENCY_FIELD_HELP.session },
+        { key: "Nom de l'écran", value: latencyNaValue(report.screenName), term: report.screenName, navType: "SCREEN", help: LATENCY_FIELD_HELP.screen },
+        { key: "Objet / classe", value: latencyNaValue(report.className), term: report.className, navType: "OBJECT", help: LATENCY_FIELD_HELP.object }
+    ];
+    return `<div class="latency-trigger-grid">
+        ${fields.map(f => {
+            const term = (f.term == null ? "" : String(f.term)).trim();
+            const navable = f.value !== "n/a" && term.length > 0;
+            if (navable) {
+                return `<button type="button" class="latency-trigger-item is-navable is-crumb"
+                        data-latency-crumb="1"
+                        data-nav-type="${escapeHtml(f.navType)}"
+                        data-nav-value="${escapeHtml(term)}"
+                        data-nav-label="${escapeHtml(f.value)}"
+                        title="${escapeHtml(f.help)} — cliquez pour filtrer les logs (navigation cumulative).">
+                    <span class="latency-trigger-key">${escapeHtml(f.key)}</span>
+                    <span class="latency-trigger-val">${escapeHtml(f.value)}</span>
+                    <span class="latency-trigger-go">Filtrer ces logs →</span>
+                </button>`;
+            }
+            return `<div class="latency-trigger-item is-na" title="${escapeHtml(f.help)}">
+                <span class="latency-trigger-key">${escapeHtml(f.key)}</span>
+                <span class="latency-trigger-val">${escapeHtml(f.value)}</span>
+            </div>`;
+        }).join("")}
+    </div>`;
+}
+
+// Chaîne des déclencheurs métier (utilisateur → process → uuid → …).
+// Chaque maillon est cliquable et démarre/continue la navigation cumulative.
+function renderBusinessTriggerChain(report) {
+    const seq = [
+        { type: "USER", label: report.userName, value: report.userName },
+        { type: "PROCESS", label: cleanProcessLabel(report.processName), value: report.processName },
+        { type: "UUID", label: report.uuid, value: report.uuid },
+        { type: "ACTION", label: report.actionName, value: report.actionName },
+        { type: "FILTER", label: report.filterCode, value: report.filterCode },
+        { type: "SESSION", label: report.sessionId, value: report.sessionId },
+        { type: "OBJECT", label: report.className, value: report.className },
+        { type: "SCREEN", label: report.screenName, value: report.screenName }
+    ].filter(s => {
+        const v = s.value == null ? "" : String(s.value).trim();
+        return v !== "" && latencyNaValue(v) !== "n/a";
+    });
+    if (!seq.length) {
+        return "";
+    }
+    const parts = seq.map(s => {
+        const value = String(s.value).trim();
+        const label = String(s.label == null ? s.value : s.label).trim();
+        return `<button type="button" class="latency-chain-node is-crumb"
+                data-latency-crumb="1"
+                data-nav-type="${escapeHtml(s.type)}"
+                data-nav-value="${escapeHtml(value)}"
+                data-nav-label="${escapeHtml(label)}"
+                title="Cliquer pour filtrer les logs sur ${escapeHtml(crumbTypeLabel(s.type))}">
+            <span class="latency-chain-type">${escapeHtml(crumbTypeLabel(s.type))}</span>
+            <span class="latency-chain-val">${escapeHtml(label)}</span>
+        </button>`;
+    }).join(`<span class="latency-chain-arrow">→</span>`);
+    return `<div class="latency-chain"><span class="latency-chain-label">Chaîne des déclencheurs :</span> ${parts}</div>`;
+}
+
+const LATENCY_CONTAINER_TYPES = new Set(["GLOBAL_SEARCH", "PARTITIONAL_SEARCH"]);
+
+function renderLatencyTimeBars(steps, maxDurationMs) {
+    // On exclut les étapes "suspect" (took anomalique) : elles fausseraient l'échelle.
+    const all = (Array.isArray(steps) ? steps : []).filter(s => Number(s.durationMs) > 0 && !s.suspect);
+    // Les conteneurs (recherche globale/partitionnée) agrègent leurs sous-étapes :
+    // on les masque pour ne pas fausser la lecture, sauf s'ils sont eux-mêmes le goulot.
+    const leaves = all.filter(s => !LATENCY_CONTAINER_TYPES.has(s.stepType) || s.bottleneck);
+    const measured = (leaves.length ? leaves : all)
+        .sort((a, b) => Number(b.durationMs) - Number(a.durationMs))
+        .slice(0, 6);
+    if (!measured.length) {
+        return `<p class="muted-text">Pas d'étape chronométrée dans la fenêtre analysée.</p>`;
+    }
+    const top = Number(measured[0].durationMs) || 1;
+    return `<div class="latency-bars">
+        ${measured.map(s => {
+            const ms = Number(s.durationMs) || 0;
+            const pct = Math.max(4, Math.round((ms / top) * 100));
+            const navTerm = `took [${ms}]`;
+            return `<button type="button" class="latency-bar-row is-navable ${s.bottleneck ? "is-bottleneck" : ""}"
+                    data-latency-nav="${escapeHtml(navTerm)}"
+                    title="Cliquez pour voir cette étape dans les logs.">
+                <span class="latency-bar-label">${escapeHtml(friendlyStepLabel(s))}${s.bottleneck ? ' <span class="latency-bar-tag">cause principale</span>' : ""}</span>
+                <span class="latency-bar-track"><span class="latency-bar-fill" style="width:${pct}%"></span></span>
+                <span class="latency-bar-value">${escapeHtml(formatLatencyDurationMs(ms))}</span>
+            </button>`;
+        }).join("")}
+    </div>`;
+}
+
+function renderLatencyPrimaryCause(report) {
+    const cause = (report.primaryCause || "").trim();
+    if (!cause) {
+        return "";
+    }
+    const term = (report.bottleneckSearchTerm || "").trim();
+    if (!term) {
+        return `<div class="latency-verdict-cause">${escapeHtml(cause)}</div>`;
+    }
+    return `<button type="button" class="latency-verdict-cause is-navable"
+                data-latency-nav="${escapeHtml(term)}"
+                title="Cliquez pour voir le goulot dans les logs (« ${escapeHtml(term)} »).">
+                <span>${escapeHtml(cause)}</span>
+                <span class="latency-trigger-go">Voir les logs →</span>
+            </button>`;
+}
+
+function renderLatencyRootCause(report) {
+    const groups = Array.isArray(report.repeatedQueryGroups) ? report.repeatedQueryGroups : [];
+    if (!report.rootCauseSummary && !groups.length) {
+        return "";
+    }
+    const searchTerm = (report.rootCauseSearchTerm || "").trim();
+    const summaryNavable = searchTerm.length > 0 && !!report.rootCauseSummary;
+    const summaryBlock = report.rootCauseSummary
+        ? (summaryNavable
+            ? `<button type="button" class="latency-rootcause-summary is-navable"
+                    data-latency-nav="${escapeHtml(searchTerm)}"
+                    title="Cliquez pour filtrer les logs sur « ${escapeHtml(searchTerm)} ».">
+                    <span class="latency-rootcause-summary-text">${escapeHtml(report.rootCauseSummary)}</span>
+                    <span class="latency-trigger-go">Voir les logs →</span>
+               </button>`
+            : `<p class="latency-rootcause-summary">${escapeHtml(report.rootCauseSummary)}</p>`)
+        : "";
+    const meaningBlock = report.rootCauseMeaning
+        ? `<p class="latency-rootcause-meaning"><strong>Pourquoi c’est cité :</strong> ${escapeHtml(report.rootCauseMeaning)}</p>`
+        : (summaryNavable
+            ? `<p class="latency-rootcause-meaning"><strong>Pourquoi c’est cité :</strong> élément observé dans la fenêtre d’analyse — cliquez pour voir les logs correspondants.</p>`
+            : "");
+    const rows = groups.map(g => {
+        const term = (g.filterCode == null ? "" : String(g.filterCode)).trim();
+        const navable = term.length > 0;
+        const tag = navable ? "button" : "div";
+        const attrs = navable
+            ? `type="button" class="latency-rootcause-row is-navable" data-latency-nav="${escapeHtml(term)}" title="Cliquez pour voir les ${escapeHtml(String(g.count))} exécutions dans les logs."`
+            : `class="latency-rootcause-row"`;
+        return `<${tag} ${attrs}>
+            <span class="latency-rootcause-filter">${escapeHtml(g.filterCode || "?")}</span>
+            <span class="latency-rootcause-count">${escapeHtml(String(g.count))}× exéc.</span>
+            <span class="latency-rootcause-total">${escapeHtml(formatLatencyDurationMs(g.totalMs))} cumulées</span>
+            <span class="latency-rootcause-max">max ${escapeHtml(formatLatencyDurationMs(g.maxMs))}</span>
+            ${navable ? `<span class="latency-trigger-go">Voir les logs →</span>` : ""}
+        </${tag}>`;
+    }).join("");
+    return `
+        <div class="latency-origin-section latency-rootcause">
+            <h4>Source du problème</h4>
+            <p class="latency-nav-hint">Cliquez la source pour ouvrir les logs relatifs, puis lisez pourquoi elle est citée.</p>
+            ${summaryBlock}
+            ${meaningBlock}
+            ${rows ? `<div class="latency-rootcause-list">${rows}</div>` : ""}
+        </div>`;
+}
+
+function renderLatencyWhyChain(report) {
+    const levels = Array.isArray(report.whyChain) ? report.whyChain.filter(Boolean) : [];
+    if (!levels.length) {
+        return "";
+    }
+    return `
+        <div class="latency-origin-section latency-why-chain">
+            <h4>Pourquoi ? (en profondeur)</h4>
+            <p class="latency-nav-hint">Pas seulement « c'est lent » : chaque niveau explique le niveau précédent.</p>
+            <ol class="latency-why-list">
+                ${levels.map((w, i) => `
+                    <li class="latency-why-item">
+                        <span class="latency-why-level">Pourquoi ${i + 1}</span>
+                        <span class="latency-why-text">${escapeHtml(w)}</span>
+                    </li>`).join("")}
+            </ol>
+        </div>`;
+}
+
+function renderLatencyRecommendations(report) {
+    const recs = Array.isArray(report.recommendations) ? report.recommendations : [];
+    if (!recs.length) {
+        return "";
+    }
+    return `
+        <div class="latency-origin-section latency-reco">
+            <h4>Que faire pour corriger ?</h4>
+            <p class="latency-nav-hint">Pistes concrètes dérivées des faits mesurés dans les logs.</p>
+            <ul class="latency-reco-list">
+                ${recs.map(r => `<li>${escapeHtml(r)}</li>`).join("")}
+            </ul>
+        </div>`;
+}
+
 function renderLatencyOriginPanel(report) {
     const panel = getLatencyOriginPanel();
     if (!panel) return;
 
+    initLatencyNavChain(report.importId);
+    window.lastLatencyReport = report;
+
     const steps = report.timelineSteps || [];
-    const chronoBlock = typeof renderChronologicalContextBlock === "function" && report.chronologicalText
-        ? renderChronologicalContextBlock(report.chronologicalText, {
-            title: "Chronologie de l'opération lente",
-            placeholder: "Tous les termes requis, séparés par ; — ex: prepareSearchByRoot;took",
-            showScrollSelected: false
-        })
-        : "";
+    const sev = latencySeverity(report.maxDurationMs);
 
     panel.innerHTML = `
-        <div class="analysis-block latency-origin-card">
+        <div class="analysis-block latency-origin-card latency-sev-${sev.level}">
             <div class="latency-origin-header">
                 <h3>Origine de la lenteur</h3>
                 <button type="button" class="secondary-btn small-btn" onclick="clearLatencyOriginPanel()">Fermer</button>
             </div>
-            <div class="analysis-kpis">
-                <span class="log-pill">${escapeHtml(report.scopeDescription || "périmètre")}</span>
-                <span class="log-pill">Confiance : ${escapeHtml(report.analysisConfidence || "—")}</span>
-                <span class="log-pill warn-pill">Max : ${escapeHtml(formatLatencyDurationMs(report.maxDurationMs))}</span>
-                <span class="log-pill muted-pill">${escapeHtml(report.logsInWindow || 0)} log(s) analysé(s)</span>
+
+            <div class="latency-verdict">
+                <div class="latency-verdict-icon">${sev.icon}</div>
+                <div class="latency-verdict-main">
+                    <div class="latency-verdict-title">${escapeHtml(sev.label)} — ${escapeHtml(formatLatencyDurationMs(report.maxDurationMs))}</div>
+                    ${renderLatencyPrimaryCause(report)}
+                </div>
+                <div class="latency-verdict-confidence" ${report.analysisConfidenceReason ? `title="${escapeHtml(report.analysisConfidenceReason)}"` : ""}>Fiabilité de l'analyse<br><strong>${escapeHtml(friendlyConfidence(report.analysisConfidence))}</strong>${report.analysisConfidenceReason ? `<br><span class="latency-confidence-reason">${escapeHtml(report.analysisConfidenceReason)}</span>` : ""}</div>
             </div>
+
+            ${report.measurementWarning ? `<div class="latency-measure-warning">⚠️ <strong>Mesure non fiable</strong> — ${escapeHtml(report.measurementWarning)}</div>` : ""}
+
             <div class="latency-origin-section latency-client-summary">
-                <h4>Résumé (langage métier)</h4>
+                <h4>En clair</h4>
                 <p class="latency-client-summary-text">${escapeHtml(report.clientSummary || report.primaryCause || "")}</p>
             </div>
+
+            ${renderLatencyWhyChain(report)}
+
+            ${renderLatencyRecommendations(report)}
+
+            <div id="latencyNavStatus" class="latency-nav-status" hidden></div>
+
             <div class="latency-origin-section">
-                <h4>Cause principale</h4>
-                <p class="latency-primary-cause">${escapeHtml(report.primaryCause || "")}</p>
+                <h4>Déclencheur métier</h4>
+                ${renderBusinessTriggerChain(report)}
+                <p class="latency-nav-hint">🔎 Cliquez sur un élément pour filtrer les logs réels (navigation cumulative : chaque clic ajoute un filtre ET).</p>
+                ${renderLatencyTriggerGrid(report)}
             </div>
+
+            <div class="latency-origin-section latency-cumulative">
+                <h4>Navigation guidée — logs réels (filtre cumulatif)</h4>
+                <p class="latency-nav-hint">Chaque déclencheur cliqué <strong>ajoute</strong> un filtre. Utilisez ◀ Préc. / Suiv. ▶ pour remonter ou avancer dans la chaîne. Tous les logs correspondants sont affichés, sans limite.</p>
+                <div id="latencyCrumbBar" class="latency-crumb-bar"></div>
+                <div id="latencyCumulativeStatus" class="latency-cumulative-status muted-text"></div>
+                <div id="latencyCumulativeLogs" class="latency-cumulative-logs"></div>
+            </div>
+
             <div class="latency-origin-section">
-                <h4>Analyse détaillée</h4>
-                <pre class="latency-narrative">${escapeHtml(report.narrativeSummary || "")}</pre>
+                <h4>Où est passé le temps ?</h4>
+                ${renderLatencyTimeBars(steps, report.maxDurationMs)}
             </div>
-            <div class="latency-origin-section">
-                <h4>Chaîne d'exécution</h4>
-                <p>${escapeHtml(report.chainExplanation || "")}</p>
+
+            ${renderLatencyRootCause(report)}
+
+            <details class="latency-origin-section latency-details-tech" open>
+                <summary>Analyse détaillée (technique)</summary>
+                <div class="latency-tech-body">
+                    <div class="latency-explain-head">
+                        <h4>Explication pas à pas</h4>
+                        <span id="latencyExplainBadge" class="latency-explain-badge is-loading">🧠 Génération par l'IA…</span>
+                    </div>
+                    <div id="latencyExplainText" class="latency-narrative">${escapeHtml(report.narrativeSummary || "Analyse en cours…")}</div>
+                    <h4>Chaîne d'exécution</h4>
+                    <p>${escapeHtml(report.chainExplanation || "")}</p>
+                    <h4>Étapes identifiées (${steps.length})</h4>
+                    ${renderLatencyTimelineSteps(steps)}
+                </div>
+            </details>
+
+            <div class="latency-origin-meta">
+                <span class="log-pill">${escapeHtml(report.scopeDescription || "périmètre")}</span>
+                <span class="log-pill muted-pill">${escapeHtml(report.logsInWindow || 0)} log(s) analysé(s)</span>
             </div>
-            <div class="latency-origin-section">
-                <h4>Étapes identifiées (${steps.length})</h4>
-                ${renderLatencyTimelineSteps(steps)}
-            </div>
-            ${chronoBlock}
         </div>
     `;
 
-    if (typeof bindChronologicalContextSearch === "function") {
-        bindChronologicalContextSearch();
-    }
+    bindLatencyNavigation(panel);
+    renderLatencyBreadcrumb();
+    loadLatencyLlmExplanation(report);
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Confie la rédaction de « Explication pas à pas » à un LLM (Ollama local ou OpenAI).
+// Le Java a déjà sélectionné les logs concernés + les faits vérifiés (dans `report`) ;
+// on les renvoie au backend qui appelle le modèle. En cas d'indisponibilité, on garde
+// le texte règle-based déjà affiché (aucune casse).
+async function loadLatencyLlmExplanation(report) {
+    const textEl = document.getElementById("latencyExplainText");
+    const badgeEl = document.getElementById("latencyExplainBadge");
+    if (!textEl) return;
+
+    const fallback = report.narrativeSummary || "";
+
+    try {
+        const res = await authFetch("/assistant/latency-explanation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(report)
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data?.message || data?.error || "Erreur explication IA");
+
+        const explanation = (data && data.explanation) ? data.explanation : fallback;
+        const source = data?.source || "LOCAL";
+        if (data && data.generatedByLlm) {
+            textEl.classList.add("latency-narrative-md");
+            textEl.innerHTML = renderSimpleMarkdown(explanation || "Explication indisponible.");
+        } else {
+            textEl.classList.remove("latency-narrative-md");
+            textEl.textContent = explanation || "Explication indisponible.";
+        }
+
+        if (badgeEl) {
+            badgeEl.classList.remove("is-loading");
+            if (source === "OPENAI") {
+                badgeEl.classList.add("is-ai");
+                badgeEl.textContent = "🤖 Généré par l'IA (OpenAI · " + (data.model || "") + ")";
+            } else if (source === "OLLAMA") {
+                badgeEl.classList.add("is-ai");
+                badgeEl.textContent = "🧠 Généré par l'IA locale (" + (data.model || "Ollama") + ")";
+            } else {
+                badgeEl.classList.add("is-local");
+                badgeEl.textContent = "📋 Analyse guidée (sans IA)";
+                if (data?.note) badgeEl.title = data.note;
+            }
+        }
+    } catch (e) {
+        textEl.classList.remove("latency-narrative-md");
+        textEl.textContent = fallback || "Explication indisponible.";
+        if (badgeEl) {
+            badgeEl.classList.remove("is-loading");
+            badgeEl.classList.add("is-local");
+            badgeEl.textContent = "📋 Analyse guidée (IA indisponible)";
+            badgeEl.title = e.message || "";
+        }
+    }
+}
+
+// Rendu markdown minimal (titres, gras, listes, tableaux) pour afficher proprement
+// l'explication de l'IA. Volontairement simple et sans dépendance externe.
+function renderSimpleMarkdown(md) {
+    if (!md) return "";
+    // Certains modèles ajoutent un bloc de raisonnement <think>…</think> : on l'enlève.
+    let text = String(md).replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    const esc = (s) => s
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = (s) => esc(s)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    const lines = text.split(/\r?\n/);
+    let html = "";
+    let i = 0;
+    let listType = null;
+    const closeList = () => { if (listType) { html += `</${listType}>`; listType = null; } };
+
+    while (i < lines.length) {
+        let line = lines[i];
+
+        // Tableau markdown : ligne | ... | suivie d'une ligne de séparation | --- |
+        if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+            closeList();
+            const parseRow = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+            const headers = parseRow(line);
+            i += 2;
+            let body = "";
+            while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+                const cells = parseRow(lines[i]);
+                body += "<tr>" + cells.map(c => `<td>${inline(c)}</td>`).join("") + "</tr>";
+                i++;
+            }
+            html += `<table class="latency-md-table"><thead><tr>`
+                + headers.map(h => `<th>${inline(h)}</th>`).join("")
+                + `</tr></thead><tbody>${body}</tbody></table>`;
+            continue;
+        }
+
+        let m;
+        if ((m = line.match(/^\s*(#{1,4})\s+(.*)$/))) {
+            closeList();
+            const lvl = Math.min(m[1].length + 2, 6);
+            html += `<h${lvl}>${inline(m[2])}</h${lvl}>`;
+        } else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) {
+            if (listType !== "ul") { closeList(); listType = "ul"; html += "<ul>"; }
+            html += `<li>${inline(m[1])}</li>`;
+        } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+            if (listType !== "ol") { closeList(); listType = "ol"; html += "<ol>"; }
+            html += `<li>${inline(m[1])}</li>`;
+        } else if (line.trim() === "") {
+            closeList();
+        } else {
+            closeList();
+            html += `<p>${inline(line)}</p>`;
+        }
+        i++;
+    }
+    closeList();
+    return html;
+}
+
+// Rend le panneau navigable : tout élément [data-latency-nav] (champ métier, étape,
+// règle fautive) amène la chronologie sur les VRAIES lignes de logs le contenant.
+function bindLatencyNavigation(panel) {
+    if (!panel) return;
+    // Barres de temps + règles répétées : recherche texte dans la chronologie de l'opération.
+    panel.querySelectorAll("[data-latency-nav]").forEach(el => {
+        el.addEventListener("click", (e) => {
+            e.preventDefault();
+            navigateLatencyToTerm(panel, el.getAttribute("data-latency-nav"), el);
+        });
+    });
+    // Tuiles déclencheurs + chaîne métier : navigation cumulative (filtres ET).
+    panel.querySelectorAll("[data-latency-crumb]").forEach(el => {
+        el.addEventListener("click", (e) => {
+            e.preventDefault();
+            latencyCrumbClick(
+                el.getAttribute("data-nav-type"),
+                el.getAttribute("data-nav-value"),
+                el.getAttribute("data-nav-label")
+            );
+        });
+    });
+}
+
+// ─── Navigation cumulative : fil d'Ariane + chargement des logs réels ───
+function initLatencyNavChain(importId) {
+    window.latencyNavChain = { importId: importId || null, crumbs: [], pointer: -1 };
+}
+
+function latencyCrumbClick(type, value, label) {
+    if (!type || value == null) return;
+    const chain = window.latencyNavChain || (window.latencyNavChain = { importId: null, crumbs: [], pointer: -1 });
+    const norm = (s) => String(s == null ? "" : s).trim().toLowerCase();
+    const existing = chain.crumbs.findIndex(c => c.type === type && norm(c.value) === norm(value));
+    if (existing >= 0) {
+        // Déjà dans la chaîne : on s'y repositionne (comme un clic dans le fil d'Ariane).
+        chain.pointer = existing;
+    } else {
+        // On tronque les maillons "en avant" (comportement type historique) puis on ajoute.
+        chain.crumbs = chain.crumbs.slice(0, chain.pointer + 1);
+        chain.crumbs.push({ type, value: String(value).trim(), label: (label || value) });
+        chain.pointer = chain.crumbs.length - 1;
+    }
+    fetchCumulativeLogs();
+}
+
+function latencyNavStep(delta) {
+    const chain = window.latencyNavChain;
+    if (!chain || !chain.crumbs.length) return;
+    const next = chain.pointer + delta;
+    if (next < 0 || next >= chain.crumbs.length) return;
+    chain.pointer = next;
+    fetchCumulativeLogs();
+}
+
+function renderLatencyBreadcrumb() {
+    const chain = window.latencyNavChain;
+    const bar = document.getElementById("latencyCrumbBar");
+    if (!bar || !chain) return;
+
+    if (!chain.crumbs.length) {
+        bar.innerHTML = `<span class="latency-crumb-empty">Cliquez un déclencheur ci-dessus pour démarrer la navigation.</span>`;
+        return;
+    }
+
+    const trail = chain.crumbs.map((c, i) => {
+        const cls = i === chain.pointer ? "is-current" : (i > chain.pointer ? "is-ahead" : "");
+        return `<button type="button" class="latency-crumb ${cls}" data-crumb-index="${i}"
+                title="${escapeHtml(crumbTypeLabel(c.type))} : ${escapeHtml(c.value)}">
+            <span class="latency-crumb-type">${escapeHtml(crumbTypeLabel(c.type))}</span>
+            <span class="latency-crumb-val">${escapeHtml(c.label || c.value)}</span>
+        </button>`;
+    }).join(`<span class="latency-crumb-sep">→</span>`);
+
+    bar.innerHTML = `
+        <div class="latency-crumb-controls">
+            <button type="button" class="secondary-btn small-btn" id="latencyNavPrevBtn" ${chain.pointer <= 0 ? "disabled" : ""}>◀ Préc.</button>
+            <button type="button" class="secondary-btn small-btn" id="latencyNavNextBtn" ${chain.pointer >= chain.crumbs.length - 1 ? "disabled" : ""}>Suiv. ▶</button>
+            <button type="button" class="secondary-btn small-btn" id="latencyNavResetBtn">Réinitialiser</button>
+        </div>
+        <div class="latency-crumb-trail">${trail}</div>`;
+
+    document.getElementById("latencyNavPrevBtn")?.addEventListener("click", () => latencyNavStep(-1));
+    document.getElementById("latencyNavNextBtn")?.addEventListener("click", () => latencyNavStep(1));
+    document.getElementById("latencyNavResetBtn")?.addEventListener("click", () => {
+        chain.crumbs = [];
+        chain.pointer = -1;
+        fetchCumulativeLogs();
+    });
+    bar.querySelectorAll(".latency-crumb").forEach(el => {
+        el.addEventListener("click", () => {
+            const i = Number(el.getAttribute("data-crumb-index"));
+            if (Number.isFinite(i)) {
+                chain.pointer = i;
+                fetchCumulativeLogs();
+            }
+        });
+    });
+}
+
+async function fetchCumulativeLogs() {
+    const chain = window.latencyNavChain;
+    const status = document.getElementById("latencyCumulativeStatus");
+    const box = document.getElementById("latencyCumulativeLogs");
+    if (!chain) return;
+
+    renderLatencyBreadcrumb();
+
+    if (!box) return;
+    if (chain.pointer < 0 || !chain.crumbs.length) {
+        if (status) status.textContent = "";
+        box.innerHTML = "";
+        return;
+    }
+
+    const active = chain.crumbs.slice(0, chain.pointer + 1);
+    const criteria = active.map(c => ({ type: c.type, value: c.value }));
+
+    if (status) status.textContent = "Chargement des logs…";
+    box.innerHTML = "";
+
+    try {
+        const res = await authFetch("/assistant/cumulative-logs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ importId: chain.importId, criteria })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) {
+            throw new Error(data?.message || data?.error || "Erreur navigation cumulative");
+        }
+        renderCumulativeLogs(data, active);
+    } catch (e) {
+        if (status) status.textContent = "";
+        box.innerHTML = `<p class="error-text">${escapeHtml(e.message || "Erreur")}</p>`;
+    }
+}
+
+function renderCumulativeLogs(data, active) {
+    const status = document.getElementById("latencyCumulativeStatus");
+    const box = document.getElementById("latencyCumulativeLogs");
+    if (!box) return;
+
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    const chainText = active.map(c => `${crumbTypeLabel(c.type)} ${c.label || c.value}`).join(" → ");
+
+    if (status) {
+        status.innerHTML = `<span class="latency-cumulative-count"><strong>${lines.length}</strong> log(s) pour : <em>${escapeHtml(chainText)}</em> `
+            + `(sur ${Number(data.totalScanned) || 0} examinés) — aucune limite d'affichage.</span>`
+            + `<button type="button" class="secondary-btn small-btn latency-goto-took" id="latencyGotoTookBtn" title="Se positionner sur la ligne à l'origine de la lenteur, sans changer le filtre.">⏱ Aller à la lenteur (took)</button>`;
+        document.getElementById("latencyGotoTookBtn")?.addEventListener("click", goToTookInCumulativeLogs);
+    }
+
+    if (!lines.length) {
+        box.innerHTML = `<p class="muted-text">Aucun log ne correspond à cette combinaison.</p>`;
+        return;
+    }
+
+    box.innerHTML = lines.map(l => {
+        const lvl = String(l.level || "").toUpperCase();
+        const lvlClass = lvl === "ERROR" ? "is-error" : ((lvl === "WARN" || lvl === "WARNING") ? "is-warn" : "");
+        const meta = [l.timestamp, l.level, l.userName, l.sessionId, l.sourceFileName]
+            .filter(Boolean)
+            .map(x => escapeHtml(String(x)))
+            .join(" · ");
+        return `<div class="latency-log-line ${lvlClass}" data-log-id="${escapeHtml(String(l.id == null ? "" : l.id))}">
+            <div class="latency-log-meta">${meta}</div>
+            <div class="latency-log-msg">${escapeHtml(l.message || "")}</div>
+        </div>`;
+    }).join("");
+}
+
+// Bascule (sans changer le filtre courant) vers la ligne à l'origine de la lenteur
+// dans la liste des logs cumulés, puis la surligne d'une couleur distincte.
+function goToTookInCumulativeLogs() {
+    const report = window.lastLatencyReport || {};
+    const box = document.getElementById("latencyCumulativeLogs");
+    const status = document.getElementById("latencyCumulativeStatus");
+    if (!box) return;
+
+    box.querySelectorAll(".latency-log-line.is-took-target")
+        .forEach(el => el.classList.remove("is-took-target"));
+    box.querySelectorAll(".latency-log-line.is-nav-match")
+        .forEach(el => el.classList.remove("is-nav-match"));
+    status?.querySelector(".latency-goto-note")?.remove();
+
+    let target = null;
+
+    // 1) Correspondance exacte par l'ID du log d'ancrage (le log qui mesure le took).
+    if (report.anchorLogId != null) {
+        target = box.querySelector(`[data-log-id="${CSS.escape(String(report.anchorLogId))}"]`);
+    }
+    // 2) Repli : première ligne contenant le terme du goulot (ex. "took [159658]").
+    if (!target) {
+        const term = String(report.bottleneckSearchTerm || "").trim().toLowerCase();
+        if (term) {
+            target = Array.from(box.querySelectorAll(".latency-log-line"))
+                .find(el => el.textContent.toLowerCase().includes(term)) || null;
+        }
+    }
+    // 3) Repli : ligne portant la durée mise en avant.
+    if (!target && report.maxDurationMs != null) {
+        const needle = `took [${report.maxDurationMs}]`.toLowerCase();
+        target = Array.from(box.querySelectorAll(".latency-log-line"))
+            .find(el => el.textContent.toLowerCase().includes(needle)) || null;
+    }
+
+    if (target) {
+        target.classList.add("is-took-target");
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (status) {
+        const note = document.createElement("span");
+        note.className = "latency-goto-note";
+        note.textContent = " — la ligne du took n'est pas dans ce filtre (élargissez la sélection pour l'inclure).";
+        status.appendChild(note);
+    }
+}
+
+// Clic sur une barre de temps ou une règle : on se positionne sur la/les ligne(s)
+// correspondante(s) DANS les logs de la navigation guidée (filtre courant inchangé).
+function navigateLatencyToTerm(panel, term, sourceEl) {
+    const cleaned = (term == null ? "" : String(term)).trim();
+    if (!cleaned) {
+        return;
+    }
+
+    panel.querySelectorAll("[data-latency-nav].is-active-nav")
+        .forEach(n => n.classList.remove("is-active-nav"));
+    if (sourceEl) {
+        sourceEl.classList.add("is-active-nav");
+    }
+
+    const status = document.getElementById("latencyNavStatus");
+    const box = document.getElementById("latencyCumulativeLogs");
+
+    if (!box || !box.querySelector(".latency-log-line")) {
+        if (status) {
+            status.hidden = false;
+            status.className = "latency-nav-status is-empty";
+            status.innerHTML = `Démarrez d'abord la navigation guidée (cliquez un déclencheur ci-dessus), puis cliquez « ${escapeHtml(cleaned)} » pour vous y positionner.`;
+        }
+        return;
+    }
+
+    const matches = highlightTermInCumulativeLogs(cleaned);
+    if (status) {
+        status.hidden = false;
+        if (matches > 0) {
+            status.className = "latency-nav-status is-found";
+            status.innerHTML = `<strong>${matches}</strong> occurrence(s) de « ${escapeHtml(cleaned)} » surlignée(s) dans les logs de la navigation.`;
+        } else {
+            status.className = "latency-nav-status is-empty";
+            status.innerHTML = `« ${escapeHtml(cleaned)} » n'apparaît pas dans les logs du filtre courant (élargissez la sélection).`;
+        }
+    }
+}
+
+// Surligne (en bleu) toutes les lignes des logs cumulés contenant le terme et défile vers la première.
+function highlightTermInCumulativeLogs(term) {
+    const box = document.getElementById("latencyCumulativeLogs");
+    if (!box) return 0;
+    box.querySelectorAll(".latency-log-line.is-nav-match").forEach(el => el.classList.remove("is-nav-match"));
+    box.querySelectorAll(".latency-log-line.is-took-target").forEach(el => el.classList.remove("is-took-target"));
+    const t = String(term || "").toLowerCase();
+    let first = null;
+    let count = 0;
+    box.querySelectorAll(".latency-log-line").forEach(el => {
+        if (el.textContent.toLowerCase().includes(t)) {
+            el.classList.add("is-nav-match");
+            count++;
+            if (!first) first = el;
+        }
+    });
+    if (first) {
+        first.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    return count;
+}
+
+function updateLatencyNavStatus(term, count) {
+    const status = document.getElementById("latencyNavStatus");
+    if (!status) return;
+    status.hidden = false;
+    if (count > 0) {
+        const preview = latencyMatchingPreview(term, 3);
+        const previewHtml = preview.length
+            ? `<div class="latency-nav-preview">${preview.map(l =>
+                `<div class="latency-nav-preview-line">${highlightLatencyTerm(l, term)}</div>`).join("")}</div>`
+            : "";
+        status.className = "latency-nav-status is-found";
+        status.innerHTML = `<div class="latency-nav-line">Exploration : <strong>${escapeHtml(term)}</strong> — `
+            + `<strong>${count}</strong> occurrence(s) dans les logs réels :</div>`
+            + previewHtml
+            + `<div class="latency-nav-hint-inline">Détail complet et navigation ◀ Préc. / Suiv. ▶ dans la chronologie ci-dessous.</div>`;
+    } else {
+        status.className = "latency-nav-status is-empty";
+        status.innerHTML = `Exploration : <strong>${escapeHtml(term)}</strong> — aucune occurrence dans la fenêtre analysée.`;
+    }
+}
+
+// Renvoie les premières lignes RÉELLES de la chronologie contenant le terme (preuve directe).
+function latencyMatchingPreview(term, max) {
+    const text = window.lastChronologicalExplanation || "";
+    const t = String(term || "").toLowerCase();
+    if (!text || !t) return [];
+    const out = [];
+    for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed && trimmed.toLowerCase().includes(t)) {
+            out.push(trimmed.length > 240 ? trimmed.slice(0, 237) + "..." : trimmed);
+            if (out.length >= max) break;
+        }
+    }
+    return out;
+}
+
+function highlightLatencyTerm(line, term) {
+    const safe = escapeHtml(line);
+    const t = String(term || "");
+    if (!t) return safe;
+    try {
+        const re = new RegExp("(" + escapeRegex(t) + ")", "ig");
+        return safe.replace(re, "<mark>$1</mark>");
+    } catch {
+        return safe;
+    }
+}
+
+// Pointe automatiquement la chronologie sur la ligne contenant le « took » du goulot,
+// pour que l'utilisateur tombe directement sur le log responsable de la lenteur.
+function pointChronologyToBottleneck(report) {
+    const term = report && report.bottleneckSearchTerm;
+    if (!term || typeof applyChronologicalContextSearch !== "function") {
+        return;
+    }
+    const input = document.getElementById("chronoContextSearch");
+    if (input) {
+        input.value = term;
+    }
+    setTimeout(() => applyChronologicalContextSearch(term, { resetIndex: true, scrollToMatch: true }), 80);
 }
 
 function clearLatencyOriginPanel() {
@@ -1023,11 +1799,16 @@ function extractUuidFromIncident(inc) {
     const sources = [
         ...(inc?.evidenceMessages || []),
         inc?.businessKey,
-        inc?.correlationId
+        inc?.correlationId,
+        inc?.message,
+        inc?.rawLog
     ].filter(Boolean);
     for (const text of sources) {
-        const match = String(text).match(/\buuid\s*\[\s*([^\]]+?)\s*]/i);
-        if (match) return match[1].trim();
+        const labeled = String(text).match(/\buuid\s*\[\s*([^\]]+?)\s*]/i);
+        if (labeled) return labeled[1].trim();
+        // Forme WORKS : [3541956776772717142] doAction for …
+        const leading = String(text).match(/(?:^|\|)\s*\[(-?\d{10,20})\]\s+(?=[A-Za-z_])/);
+        if (leading) return leading[1].trim();
     }
     return null;
 }
@@ -1649,7 +2430,14 @@ function afterEmployeeUpload(importId, fileName) {
         }
         const anomalies = document.getElementById("importAnomaliesPanel");
         if (anomalies) {
-            loadImportAnomalies(importId, anomalies);
+            // Ne pas lancer l'analyse latences automatiquement (évite OOM juste après un gros import).
+            anomalies.innerHTML = `
+                <div class="analysis-block">
+                    <p class="muted-text">Import enregistré. Lancez l’analyse des latences quand vous êtes prêt.</p>
+                    <button type="button" class="primary-btn" onclick="loadImportAnomalies(${Number(importId)}, document.getElementById('importAnomaliesPanel'))">
+                        Analyser les latences
+                    </button>
+                </div>`;
         }
     }
 }
@@ -1691,7 +2479,7 @@ async function loadUploadQualityHint(importId, container) {
                 <p>${escapeHtml(summary.parsedLines)} / ${escapeHtml(summary.totalLines)} lignes parsées — 
                 ${escapeHtml(summary.totalLogs)} logs en base, ${escapeHtml(summary.totalErrors)} erreur(s).</p>
                 ${auditRes.ok ? formatExtractionAuditHtml(audit, true) : ""}
-                <p class="section-hint">Les latences sont listées ci-dessous — explorez-les avant de regrouper les logs.</p>
+                <p class="section-hint">Puis cliquez sur <strong>Analyser les latences</strong> ci-dessous (pas lancé auto pour éviter de saturer la mémoire).</p>
             </div>
         `;
     } catch (_) { /* ignore */ }
@@ -1712,3 +2500,136 @@ window.setLatencyViewMode = setLatencyViewMode;
 window.loadArchiveAdminPanel = loadArchiveAdminPanel;
 window.runArchiveMaintenanceNow = runArchiveMaintenanceNow;
 window.afterEmployeeUpload = afterEmployeeUpload;
+window.startRagIndexing = startRagIndexing;
+window.askRagQuestion = askRagQuestion;
+
+// ─── RAG : indexation vectorielle + question ancrée ─────────────────────────
+let ragPollTimer = null;
+
+async function startRagIndexing(reindex) {
+    if (!window.activeImportId) {
+        showMessage("Choisissez d’abord un import actif.", "error");
+        return;
+    }
+    const statusEl = document.getElementById("ragIndexStatus");
+    const wrap = document.getElementById("ragProgressWrap");
+    if (statusEl) statusEl.textContent = "Démarrage de l’indexation…";
+    if (wrap) wrap.hidden = false;
+    try {
+        const q = reindex ? "?reindex=true" : "";
+        const res = await authFetch(`/rag/index/${window.activeImportId}${q}`, { method: "POST" });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data?.message || data?.error || "Erreur indexation RAG");
+        updateRagProgress(data);
+        showMessage(reindex ? "Réindexation lancée." : "Indexation lancée.", "info");
+        if (ragPollTimer) clearInterval(ragPollTimer);
+        ragPollTimer = setInterval(() => pollRagStatus(), 1500);
+    } catch (e) {
+        if (statusEl) statusEl.textContent = e.message || "Erreur";
+        showMessage(e.message || "Erreur indexation RAG.", "error");
+    }
+}
+
+async function pollRagStatus() {
+    if (!window.activeImportId) return;
+    try {
+        const res = await authFetch(`/rag/index/${window.activeImportId}/status`);
+        const data = await safeJson(res);
+        if (!res.ok) return;
+        updateRagProgress(data);
+        if (data.state === "DONE" || data.state === "ERROR" || data.state === "NONE") {
+            if (ragPollTimer) { clearInterval(ragPollTimer); ragPollTimer = null; }
+            if (data.state === "DONE") showMessage("Index IA prêt.", "success");
+            if (data.state === "ERROR") showMessage(data.message || "Erreur d’indexation.", "error");
+        }
+    } catch (_) { /* ignore poll errors */ }
+}
+
+function updateRagProgress(data) {
+    const statusEl = document.getElementById("ragIndexStatus");
+    const fill = document.getElementById("ragProgressFill");
+    const label = document.getElementById("ragProgressLabel");
+    const wrap = document.getElementById("ragProgressWrap");
+    if (!data) return;
+    const pct = data.progressPercent != null ? data.progressPercent
+        : (data.totalChunks > 0 ? Math.round(100 * (data.indexedChunks || 0) / data.totalChunks) : 0);
+    if (statusEl) {
+        const msg = data.message || "";
+        statusEl.textContent = data.state === "DONE"
+            ? `Indexé (${data.indexedChunks || 0} extraits). ${msg}`
+            : data.state === "RUNNING"
+                ? `Indexation… ${data.indexedChunks || 0}/${data.totalChunks || "?"} (${pct}%)`
+                : data.state === "ERROR"
+                    ? `Erreur : ${msg || "échec"}`
+                    : (msg || `État : ${data.state || "NONE"}`);
+    }
+    if (wrap) wrap.hidden = data.state !== "RUNNING" && data.state !== "DONE";
+    if (fill) fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+    if (label) label.textContent = data.state === "RUNNING" ? `${pct}%` : "";
+}
+
+async function askRagQuestion(event) {
+    if (event?.preventDefault) event.preventDefault();
+    if (!window.activeImportId) {
+        showMessage("Choisissez d’abord un import actif.", "error");
+        return;
+    }
+    const input = document.getElementById("ragAskInput");
+    const question = (input?.value || "").trim();
+    if (!question) {
+        showMessage("Saisissez une question.", "error");
+        return;
+    }
+    const answerEl = document.getElementById("ragAnswer");
+    const sourcesEl = document.getElementById("ragSources");
+    if (answerEl) {
+        answerEl.hidden = false;
+        answerEl.innerHTML = `<p class="muted-text">Recherche des logs pertinents + génération…</p>`;
+    }
+    if (sourcesEl) { sourcesEl.hidden = true; sourcesEl.innerHTML = ""; }
+
+    try {
+        const res = await authFetch("/rag/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ importId: Number(window.activeImportId), question })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data?.message || data?.error || "Erreur RAG");
+
+        if (answerEl) {
+            const mode = data.mode || "";
+            const hint = data.hint ? `<div class="rag-hint muted-text">${escapeHtml(data.hint)}</div>` : "";
+            const badge = mode === "LLM" ? "🧠 IA ancrée"
+                : mode === "LOCAL" ? "📋 Mode local"
+                : mode === "NO_MATCH" ? "❓ Aucun extrait"
+                : mode;
+            answerEl.innerHTML = `
+                <div class="rag-answer-head"><span class="rag-mode-badge">${escapeHtml(badge)}</span></div>
+                <div class="rag-answer-body">${typeof renderSimpleMarkdown === "function"
+                    ? renderSimpleMarkdown(data.answer || "")
+                    : escapeHtml(data.answer || "").replace(/\n/g, "<br>")}</div>
+                ${hint}`;
+        }
+
+        const sources = data.sources || [];
+        if (sourcesEl && sources.length) {
+            sourcesEl.hidden = false;
+            sourcesEl.innerHTML = `<h4>Sources (${sources.length})</h4>` + sources.map((s, i) => {
+                const ref = escapeHtml(s.ref || `S${i + 1}`);
+                const meta = [
+                    s.processName, s.filterCode, s.userName,
+                    s.maxDurationMs != null ? `${s.maxDurationMs} ms` : null
+                ].filter(Boolean).map(escapeHtml).join(" · ");
+                return `<details class="rag-source">
+                    <summary><strong>[${ref}]</strong> ${meta || "extrait"}</summary>
+                    <pre class="rag-source-content">${escapeHtml(s.content || "")}</pre>
+                </details>`;
+            }).join("");
+        }
+        showMessage("Réponse IA reçue.", "success");
+    } catch (e) {
+        if (answerEl) answerEl.innerHTML = `<p class="error-text">${escapeHtml(e.message || "Erreur")}</p>`;
+        showMessage(e.message || "Erreur question RAG.", "error");
+    }
+}

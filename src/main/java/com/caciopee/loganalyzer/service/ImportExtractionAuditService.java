@@ -7,6 +7,7 @@ import com.caciopee.loganalyzer.analysis.util.LogPatternExtractor;
 import com.caciopee.loganalyzer.dto.ImportExtractionAuditDto;
 import com.caciopee.loganalyzer.entity.LogEntry;
 import com.caciopee.loganalyzer.repository.LogEntryRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -18,7 +19,7 @@ import java.util.Optional;
 @Service
 public class ImportExtractionAuditService {
 
-    private static final int MAX_SAMPLE = 3000;
+    private static final int MAX_SAMPLE = 500;
     private static final int MAX_UNKNOWN_SAMPLES = 12;
     private static final int MAX_SAMPLE_MESSAGE_LEN = 220;
 
@@ -41,8 +42,11 @@ public class ImportExtractionAuditService {
 
         long total = logEntryRepository.countByLogImportId(importId);
         int sampleSize = (int) Math.min(total, MAX_SAMPLE);
-        List<LogEntry> all = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
-        List<LogEntry> sample = all.size() <= sampleSize ? all : all.subList(0, sampleSize);
+        // IMPORTANT: Pageable — ne jamais findAll sur un import multi-centaines-de-milliers.
+        List<LogEntry> sample = sampleSize == 0
+                ? List.of()
+                : logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(
+                        importId, PageRequest.of(0, sampleSize));
 
         long withProcess = 0;
         long withTaskOrAction = 0;
@@ -119,7 +123,7 @@ public class ImportExtractionAuditService {
         return combined.isBlank() ? "(ligne vide)" : combined;
     }
 
-    private String buildNote(long total, long sampled, double workflowPct, double catalogPct,
+    private String buildNote(long total, int sampled, double workflowPct, double catalogPct,
                              double graphFamilyPct, long unknown) {
         if (total == 0) {
             return "Aucun log en base pour cet import.";

@@ -527,9 +527,55 @@ class ExtractionQualityAuditTest {
                     return false;
                 }
             }
+            // L'extracteur omet volontairement une tâche identique à l'action (redondante) :
+            // ex. « taskName [Valider] - actionName [Valider] ». On ne l'exige donc pas.
+            String bracketTask = extractBracketValue(m, "taskName [");
+            String bracketAction = extractBracketValue(m, "actionName [");
+            if (notBlank(bracketTask) && notBlank(bracketAction)
+                    && bracketTask.equalsIgnoreCase(bracketAction)) {
+                return false;
+            }
             return true;
         }
-        return m.contains("taskName=") && !m.toLowerCase(Locale.ROOT).contains("taskname=null");
+        if (m.contains("taskName=") && !m.toLowerCase(Locale.ROOT).contains("taskname=null")) {
+            // Forme map (« no rule found ... {taskName=FREETOGO_IMP, ...} ») : une tâche
+            // identique au segment process est redondante → omise par l'extracteur.
+            String mapTask = extractMapValue(m, "taskName=");
+            if (procCol != null && procCol.startsWith("processFilter")) {
+                String middle = middleProcessSegment(procCol);
+                if (notBlank(mapTask) && notBlank(middle) && mapTask.equalsIgnoreCase(middle)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static String extractBracketValue(String message, String marker) {
+        int idx = message.indexOf(marker);
+        if (idx < 0) {
+            return null;
+        }
+        int start = idx + marker.length();
+        int end = message.indexOf(']', start);
+        if (end < 0) {
+            return null;
+        }
+        return message.substring(start, end).trim();
+    }
+
+    private static String extractMapValue(String message, String marker) {
+        int idx = message.indexOf(marker);
+        if (idx < 0) {
+            return null;
+        }
+        int start = idx + marker.length();
+        int end = start;
+        while (end < message.length() && message.charAt(end) != ',' && message.charAt(end) != '}') {
+            end++;
+        }
+        return message.substring(start, end).trim();
     }
 
     private static boolean expectsObject(String message) {
@@ -665,7 +711,19 @@ class ExtractionQualityAuditTest {
             Map.entry("TOM-013", new Probe(null, "need to be trim")),
             Map.entry("TOM-014", new Probe(null, "TYPE_ATTR_STRING")),
             Map.entry("EXT-003", new Probe(null, "memory usage")),
-            Map.entry("EXT-004", new Probe(null, "saveLoadLogFile"))
+            Map.entry("EXT-004", new Probe(null, "saveLoadLogFile")),
+            Map.entry("EXT-005", new Probe(null, "Works-1.5-2026-06-25-build ligne technique")),
+            Map.entry("L1-PDOC", new Probe("processDocument-0-PRINT-0-LOAD", null)),
+            Map.entry("L1-INIT", new Probe("processWorksInit-0-INIT-0-START", null)),
+            Map.entry("PROC-SAVE", new Probe("-0--0-SAVE", null)),
+            Map.entry("MET-049", new Probe(null, "global searchComposantByRoot took [41600] ms|5169 row | filter code [X] uuid [1]")),
+            Map.entry("MET-050", new Probe(null, "filter code [X] uuid [1] Query: select a from works_composant")),
+            Map.entry("MET-060", new Probe(null, "    at org.zkoss.zk.ui.UiException.create(UiException.java:1)")),
+            Map.entry("MET-063", new Probe(null, "[ETANCHEITE] setListAuthPMs for user")),
+            Map.entry("MET-067", new Probe(null, "listbox [LIST] > mapping screen done")),
+            Map.entry("MET-068", new Probe(null, "Start doSearch  for 1 element filter code [X] uuid [1]")),
+            Map.entry("MET-069", new Probe(null, "[AutomaticProcessing] Start schedule")),
+            Map.entry("WS-010", new Probe(null, "call [save] WS from 10.0.0.1"))
     );
 
     private static final List<ExtractionFixture> FIXTURES = List.of(

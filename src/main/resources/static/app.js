@@ -335,9 +335,12 @@ async function onUploadClick() {
         ? (folderFiles[0]?.webkitRelativePath?.split("/")[0] || "dossier sélectionné")
         : "fichiers sélectionnés";
 
+    const chunkHint = files.length > UPLOAD_CHUNK_SIZE
+        ? `\nEnvoi automatique par paquets de ${UPLOAD_CHUNK_SIZE} (un seul import, évite la saturation mémoire).`
+        : "";
     const confirmed = await showAppConfirm({
         title: `Importer ${files.length} fichier${files.length > 1 ? "s" : ""} sur ce site ?`,
-        message: `Tous les fichiers seront envoyés depuis « ${folderName} » (${totalMo} Mo).\n`
+        message: `Tous les fichiers seront envoyés depuis « ${folderName} » (${totalMo} Mo).${chunkHint}\n`
             + "N'effectuez cette opération que s'il s'agit d'un serveur de confiance.",
         confirmLabel: "Importer",
         cancelLabel: "Annuler"
@@ -877,19 +880,34 @@ async function uploadLogs(fileList) {
     return uploadLogsWithProgress(fileList);
 }
 
-function uploadLogsWithProgress(fileList) {
+/** Au-delà de ce seuil : envoi par paquets (évite Java heap space sur 10–20 fichiers). */
+const UPLOAD_CHUNK_SIZE = 4;
+
+async function uploadLogsWithProgress(fileList) {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) {
+        throw new Error("Aucun fichier à importer.");
+    }
+
+    const wrap = document.getElementById("uploadProgressWrap");
+    if (wrap) wrap.classList.remove("hidden");
+    setUploadProgress(0, "Préparation de l'envoi…");
+
+    // Peu de fichiers → un seul multipart (comportement historique).
+    if (files.length <= UPLOAD_CHUNK_SIZE) {
+        return uploadFilesSingleRequest(files);
+    }
+
+    // Beaucoup de fichiers → session découpée : 1 clic utilisateur, 1 import final.
+    return uploadFilesChunkedSession(files);
+}
+
+function uploadFilesSingleRequest(files) {
     return new Promise((resolve, reject) => {
         const formData = new FormData();
-        for (const file of fileList) {
+        for (const file of files) {
             formData.append("files", file);
         }
-
-        const wrap = document.getElementById("uploadProgressWrap");
-        const bar = document.getElementById("uploadProgressBar");
-        const label = document.getElementById("uploadProgressLabel");
-        if (wrap) wrap.classList.remove("hidden");
-        if (bar) bar.style.width = "0%";
-        if (label) label.textContent = "Envoi des fichiers…";
 
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/ingest/upload");
@@ -918,24 +936,8 @@ function uploadLogsWithProgress(fileList) {
                 return;
             }
 
-            const importId = extractImportIdFromUploadResponse(data);
-            const processing = Array.isArray(data)
-                ? data.some((item) => item?.processing)
-                : Boolean(data?.processing);
-
             try {
-                if (importId && processing) {
-                    setUploadProgress(12, "Envoi terminé — analyse sur le serveur…");
-                    const finalProgress = await waitForImportProgress(importId);
-                    if (Array.isArray(data) && data[0]) {
-                        data[0].success = finalProgress.success;
-                        data[0].message = finalProgress.message;
-                    }
-                } else {
-                    setUploadProgress(100, "Import terminé.");
-                    hideUploadProgress();
-                }
-                resolve(data);
+                resolve(await finishUploadAfterResponse(data));
             } catch (progressError) {
                 hideUploadProgress(0);
                 reject(progressError);
@@ -949,6 +951,117 @@ function uploadLogsWithProgress(fileList) {
 
         xhr.send(formData);
     });
+}
+
+async function uploadFilesChunkedSession(files) {
+    let sessionId = null;
+    try {
+        const startRes = await authFetch("/ingest/session/start", { method: "POST" });
+        const startData = await safeJson(startRes);
+        if (!startRes.ok) {
+            throw new Error(startData?.message || startData?.error || "Impossible de démarrer la session d'upload.");
+        }
+        sessionId = startData.sessionId;
+        if (!sessionId) {
+            throw new Error("sessionId manquant.");
+        }
+
+        const total = files.length;
+        let sent = 0;
+        for (let i = 0; i < files.length; i += UPLOAD_CHUNK_SIZE) {
+            const chunk = files.slice(i, i + UPLOAD_CHUNK_SIZE);
+            await uploadSessionChunk(sessionId, chunk, (chunkPct) => {
+                const overall = ((sent + (chunk.length * chunkPct) / 100) / total) * 100;
+                const barPct = Math.min(70, Math.round(overall * 0.70));
+                setUploadProgress(
+                    barPct,
+                    `Envoi ${Math.min(total, sent + chunk.length)}/${total} fichier(s)…`
+                );
+            });
+            sent += chunk.length;
+            setUploadProgress(
+                Math.min(70, Math.round((sent / total) * 70)),
+                `Envoi ${sent}/${total} fichier(s)…`
+            );
+        }
+
+        setUploadProgress(72, "Lancement de l'analyse sur le serveur…");
+        const commitRes = await authFetch(`/ingest/session/${encodeURIComponent(sessionId)}/commit`, {
+            method: "POST"
+        });
+        const commitData = await safeJson(commitRes);
+        sessionId = null; // commit a consommé la session
+        if (!commitRes.ok) {
+            throw new Error(commitData?.message || commitData?.error || "Erreur finalisation import.");
+        }
+
+        const asList = Array.isArray(commitData) ? commitData : [commitData];
+        return await finishUploadAfterResponse(asList);
+    } catch (e) {
+        if (sessionId) {
+            try {
+                await authFetch(`/ingest/session/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+            } catch (_) { /* ignore */ }
+        }
+        hideUploadProgress(0);
+        throw e;
+    }
+}
+
+function uploadSessionChunk(sessionId, chunkFiles, onPct) {
+    return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        for (const file of chunkFiles) {
+            formData.append("files", file);
+        }
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/ingest/session/${encodeURIComponent(sessionId)}/files`);
+        const token = localStorage.getItem("accessToken");
+        if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
+
+        xhr.upload.onprogress = (e) => {
+            if (!e.lengthComputable || typeof onPct !== "function") return;
+            onPct(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+            let data = {};
+            try {
+                data = JSON.parse(xhr.responseText || "{}");
+            } catch (_) {
+                data = { message: xhr.responseText };
+            }
+            if (xhr.status < 200 || xhr.status >= 300) {
+                reject(new Error(data?.message || "Erreur envoi paquet."));
+                return;
+            }
+            resolve(data);
+        };
+        xhr.onerror = () => reject(new Error("Erreur réseau pendant l'envoi d'un paquet."));
+        xhr.send(formData);
+    });
+}
+
+async function finishUploadAfterResponse(data) {
+    const importId = extractImportIdFromUploadResponse(data);
+    const processing = Array.isArray(data)
+        ? data.some((item) => item?.processing)
+        : Boolean(data?.processing);
+
+    if (importId && processing) {
+        setUploadProgress(75, "Envoi terminé — analyse sur le serveur…");
+        const finalProgress = await waitForImportProgress(importId);
+        if (Array.isArray(data) && data[0]) {
+            data[0].success = finalProgress.success;
+            data[0].message = finalProgress.message;
+        } else if (data && typeof data === "object") {
+            data.success = finalProgress.success;
+            data.message = finalProgress.message;
+        }
+    } else {
+        setUploadProgress(100, "Import terminé.");
+        hideUploadProgress();
+    }
+    return data;
 }
 
 function openV2WorkflowInExplorer(groupBy, groupKey) {

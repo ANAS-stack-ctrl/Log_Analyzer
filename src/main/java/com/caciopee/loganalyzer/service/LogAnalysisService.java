@@ -24,6 +24,10 @@ import java.util.stream.Collectors;
 public class LogAnalysisService {
 
     private static final long SLOW_THRESHOLD_MS = 2000L;
+    /** Plafond lignes lentes lues en base (évite OOM sur imports multi-millions). */
+    private static final int SLOW_LOG_SCAN_LIMIT = 2_000;
+    /** Plafond d'incidents renvoyés à l'UI. */
+    private static final int INCIDENT_RESULT_LIMIT = 200;
     private static final Pattern FILTER_CODE_IN_MESSAGE = Pattern.compile(
             "filter code\\s*\\[\\s*([^\\]]+?)\\s*]", Pattern.CASE_INSENSITIVE);
 
@@ -108,8 +112,9 @@ public class LogAnalysisService {
 
         dto.setTotalLogs(totalLogs);
         dto.setTotalErrors(totalErrors);
-        dto.setTotalQueryExecutionFailures(logEntryRepository.countQueryExecutionFailuresGlobally());
-        dto.setTotalRuleNotFoundSignals(logEntryRepository.countRuleNotFoundGlobally());
+        // Ne plus scanner message/raw_log en full-table (OOM dès ~100k+ lignes).
+        dto.setTotalQueryExecutionFailures(0L);
+        dto.setTotalRuleNotFoundSignals(0L);
 
         dto.setRecentImportStatuses(statuses.entrySet().stream()
                 .map(e -> new CountValueDto(e.getKey(), e.getValue()))
@@ -119,10 +124,17 @@ public class LogAnalysisService {
     }
 
     public ExecutionStoryDto getImportStory(Long importId) {
-        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
-        if (logs.isEmpty()) {
+        long total = logEntryRepository.countByLogImportId(importId);
+        if (total == 0) {
             throw new IllegalArgumentException("Aucun log trouvé pour importId=" + importId);
         }
+        if (total > 20_000) {
+            throw new IllegalArgumentException(
+                    "Import trop volumineux (" + total + " lignes) pour une story complète. "
+                            + "Filtrez par session ou business key.");
+        }
+        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(
+                importId, PageRequest.of(0, (int) total));
         return buildStory("IMPORT", importId, null, null, logs);
     }
 
@@ -143,7 +155,12 @@ public class LogAnalysisService {
     }
 
     public List<IncidentCandidateDto> detectImportIncidents(Long importId) {
-        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
+        // Ne jamais charger tout l'import : 5M+ entités → OutOfMemoryError.
+        List<LogEntry> logs = logEntryRepository.findSlowByImportId(
+                importId,
+                SLOW_THRESHOLD_MS,
+                PageRequest.of(0, SLOW_LOG_SCAN_LIMIT)
+        );
         if (logs.isEmpty()) {
             return List.of();
         }
@@ -151,7 +168,7 @@ public class LogAnalysisService {
         Map<String, List<LogEntry>> grouped = new LinkedHashMap<>();
         for (LogEntry log : logs) {
             long duration = resolveLogDuration(log);
-            if (duration <= SLOW_THRESHOLD_MS) {
+            if (duration < SLOW_THRESHOLD_MS) {
                 continue;
             }
 
@@ -183,11 +200,19 @@ public class LogAnalysisService {
                 .thenComparing((IncidentCandidateDto i) -> severityRank(i.getSeverity()))
                 .thenComparing(IncidentCandidateDto::getFirstTimestamp, Comparator.nullsLast(Comparator.reverseOrder())));
 
+        if (incidents.size() > INCIDENT_RESULT_LIMIT) {
+            return incidents.subList(0, INCIDENT_RESULT_LIMIT);
+        }
         return incidents;
     }
 
     public List<LogEntryViewDto> getGenericExplanations(Long importId) {
-        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(importId);
+        long total = logEntryRepository.countByLogImportId(importId);
+        if (total > 5_000) {
+            return List.of();
+        }
+        List<LogEntry> logs = logEntryRepository.findByLogImportIdOrderByLogTimestampAscIdAsc(
+                importId, PageRequest.of(0, (int) Math.min(total, 5_000)));
 
         return logs.stream()
                 .map(log -> {

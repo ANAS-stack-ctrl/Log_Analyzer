@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <title>Log Analyzer</title>
-    <link rel="stylesheet" href="/style.css?v=20260736" />
+    <link rel="stylesheet" href="/style.css?v=20260759" />
     <style>
         /* Panneaux Expert : masqués sauf ouverture explicite (résiste au cache JS) */
         #expertResultsDock:not(.expert-dock-open) {
@@ -162,6 +162,29 @@
                 <input id="assistantChatInput" type="text" placeholder="Ex : Pourquoi 0 row sur ce filtre ? Quelle étape est lente ?" />
                 <button type="button" id="assistantChatSendBtn">Envoyer</button>
             </div>
+        </section>
+
+        <section class="card employee-rag-card" id="ragSection">
+            <h3>IA ancrée (RAG) — questions sur l’import</h3>
+            <p class="section-hint">
+                Indexe l’import actif, puis pose une question. L’IA ne voit que les <strong>vraies lignes de logs</strong>
+                retrouvées par recherche vectorielle, et cite ses sources.
+            </p>
+            <div class="rag-toolbar">
+                <button type="button" id="ragIndexBtn" class="primary-btn">Indexer pour l’IA</button>
+                <button type="button" id="ragReindexBtn" class="secondary-btn">Réindexer</button>
+                <span id="ragIndexStatus" class="muted-text">Aucun index pour l’instant.</span>
+            </div>
+            <div class="rag-progress-wrap" id="ragProgressWrap" hidden>
+                <div class="rag-progress-bar"><div id="ragProgressFill" class="rag-progress-fill"></div></div>
+                <span id="ragProgressLabel" class="muted-text"></span>
+            </div>
+            <div class="chat-input-row rag-ask-row">
+                <input id="ragAskInput" type="text" placeholder="Ex : Pourquoi adil.benali a eu une lenteur sur SUPERVISION ED ?" />
+                <button type="button" id="ragAskBtn">Demander à l’IA</button>
+            </div>
+            <div id="ragAnswer" class="rag-answer" hidden></div>
+            <div id="ragSources" class="rag-sources" hidden></div>
         </section>
 
     </section>
@@ -472,7 +495,7 @@
 })();
 </script>
 <script src="/auth.js?v=20260625"></script>
-<script src="/app.js?v=20260734"></script>
-<script src="/employee-ui.js?v=20260736"></script>
+<script src="/app.js?v=20260755"></script>
+<script src="/employee-ui.js?v=20260759"></script>
 </body>
 </html>

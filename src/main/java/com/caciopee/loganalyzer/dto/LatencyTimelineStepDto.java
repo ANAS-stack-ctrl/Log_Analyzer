@@ -15,6 +15,8 @@ public class LatencyTimelineStepDto {
     private LocalDateTime timestamp;
     private String detail;
     private boolean bottleneck;
+    private boolean suspect;
+    private String suspectReason;
 
     public int getStepOrder() { return stepOrder; }
     public void setStepOrder(int stepOrder) { this.stepOrder = stepOrder; }
@@ -48,4 +50,10 @@ public class LatencyTimelineStepDto {
 
     public boolean isBottleneck() { return bottleneck; }
     public void setBottleneck(boolean bottleneck) { this.bottleneck = bottleneck; }
+
+    public boolean isSuspect() { return suspect; }
+    public void setSuspect(boolean suspect) { this.suspect = suspect; }
+
+    public String getSuspectReason() { return suspectReason; }
+    public void setSuspectReason(String suspectReason) { this.suspectReason = suspectReason; }
 }
